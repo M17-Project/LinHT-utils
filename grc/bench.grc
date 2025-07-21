@@ -1,0 +1,869 @@
+options:
+  parameters:
+    author: SP5WWP
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: no_gui
+    hier_block_src_path: '.:'
+    id: bench
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: Not titled yet
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: lpf_taps
+  id: variable_low_pass_filter_taps
+  parameters:
+    beta: '6.76'
+    comment: ''
+    cutoff_freq: 12.5e3
+    gain: '1.0'
+    samp_rate: samp_rate
+    value: ''
+    width: 12.5e3
+    win: window.WIN_HAMMING
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1344, 60.0]
+    rotation: 0
+    state: disabled
+- name: qam_constellation
+  id: variable_constellation
+  parameters:
+    comment: ''
+    const_points: '[-1. -1.j, -1. -0.71428571j, -1. -0.14285714j, -1. -0.42857143j,
+      -1. +1.j, -1. +0.71428571j, -1. +0.14285714j, -1. +0.42857143j, -0.71428571-1.j,
+      -0.71428571-0.71428571j, -0.71428571-0.14285714j, -0.71428571-0.42857143j, -0.71428571+1.j,
+      -0.71428571+0.71428571j, -0.71428571+0.14285714j, -0.71428571+0.42857143j, -0.14285714-1.j,
+      -0.14285714-0.71428571j, -0.14285714-0.14285714j, -0.14285714-0.42857143j, -0.14285714+1.j,
+      -0.14285714+0.71428571j, -0.14285714+0.14285714j, -0.14285714+0.42857143j, -0.42857143-1.j,
+      -0.42857143-0.71428571j, -0.42857143-0.14285714j, -0.42857143-0.42857143j, -0.42857143+1.j,
+      -0.42857143+0.71428571j, -0.42857143+0.14285714j, -0.42857143+0.42857143j, 1.
+      -1.j, 1. -0.71428571j, 1. -0.14285714j, 1. -0.42857143j, 1. +1.j, 1. +0.71428571j,
+      1. +0.14285714j, 1. +0.42857143j, 0.71428571-1.j, 0.71428571-0.71428571j, 0.71428571-0.14285714j,
+      0.71428571-0.42857143j, 0.71428571+1.j, 0.71428571+0.71428571j, 0.71428571+0.14285714j,
+      0.71428571+0.42857143j, 0.14285714-1.j, 0.14285714-0.71428571j, 0.14285714-0.14285714j,
+      0.14285714-0.42857143j, 0.14285714+1.j, 0.14285714+0.71428571j, 0.14285714+0.14285714j,
+      0.14285714+0.42857143j, 0.42857143-1.j, 0.42857143-0.71428571j, 0.42857143-0.14285714j,
+      0.42857143-0.42857143j, 0.42857143+1.j, 0.42857143+0.71428571j, 0.42857143+0.14285714j,
+      0.42857143+0.42857143j]'
+    dims: '1'
+    normalization: digital.constellation.AMPLITUDE_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '4'
+    soft_dec_lut: None
+    sym_map: np.arange(64)
+    type: calcdist
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 836.0]
+    rotation: 0
+    state: disabled
+- name: qam_constellation
+  id: variable_constellation
+  parameters:
+    comment: ''
+    const_points: '[-1-1j, -1+1j, 1+1j, 1-1j]'
+    dims: '1'
+    normalization: digital.constellation.AMPLITUDE_NORMALIZATION
+    npwr: '1.0'
+    precision: '8'
+    rot_sym: '4'
+    soft_dec_lut: None
+    sym_map: '[0, 1, 3, 2]'
+    type: 16qam
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [216, 660.0]
+    rotation: 0
+    state: disabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: int(500e3)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 12]
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '2'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 76.0]
+    rotation: 0
+    state: enabled
+- name: zmq_size
+  id: variable
+  parameters:
+    comment: ''
+    value: 2**11
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [296, 12.0]
+    rotation: 0
+    state: enabled
+- name: analog_const_source_x_0
+  id: analog_const_source_x
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: 0.5 + 0.5j
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: complex
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 60.0]
+    rotation: 0
+    state: disabled
+- name: analog_frequency_modulator_fc_0
+  id: analog_frequency_modulator_fc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    sensitivity: (2.0*np.pi*800.0)/48e3
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [840, 212.0]
+    rotation: 0
+    state: disabled
+- name: analog_quadrature_demod_cf_0
+  id: analog_quadrature_demod_cf
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gain: 48e3/(2.0*np.pi*800.0)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [928, 540.0]
+    rotation: 0
+    state: disabled
+- name: analog_random_uniform_source_x_0
+  id: analog_random_uniform_source_x
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maximum: '4'
+    maxoutbuf: '0'
+    minimum: '0'
+    minoutbuf: '0'
+    seed: '73'
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [16, 196.0]
+    rotation: 0
+    state: disabled
+- name: analog_random_uniform_source_x_0_0
+  id: analog_random_uniform_source_x
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maximum: 255+1
+    maxoutbuf: '0'
+    minimum: '0'
+    minoutbuf: '0'
+    seed: '73'
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 748.0]
+    rotation: 0
+    state: disabled
+- name: audio_sink_0
+  id: audio_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: hw:0,1
+    num_inputs: '2'
+    ok_to_block: 'True'
+    samp_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1336, 200.0]
+    rotation: 0
+    state: disabled
+- name: audio_sink_0_0
+  id: audio_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: hw:0,1
+    num_inputs: '2'
+    ok_to_block: 'True'
+    samp_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1224, 752.0]
+    rotation: 0
+    state: disabled
+- name: audio_source_0
+  id: audio_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: '"hw:0,0"'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_outputs: '2'
+    ok_to_block: 'True'
+    samp_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [16, 392.0]
+    rotation: 0
+    state: enabled
+- name: blocks_add_const_vxx_0
+  id: blocks_add_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: '-1.5'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 212.0]
+    rotation: 0
+    state: disabled
+- name: blocks_complex_to_float_0
+  id: blocks_complex_to_float
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1176, 200.0]
+    rotation: 0
+    state: disabled
+- name: blocks_complex_to_float_0_0
+  id: blocks_complex_to_float
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1064, 752.0]
+    rotation: 0
+    state: disabled
+- name: blocks_correctiq_0
+  id: blocks_correctiq
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [568, 408.0]
+    rotation: 0
+    state: enabled
+- name: blocks_float_to_complex_0
+  id: blocks_float_to_complex
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [192, 392.0]
+    rotation: 0
+    state: enabled
+- name: blocks_multiply_const_vxx_0
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: '2'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [488, 212.0]
+    rotation: 0
+    state: disabled
+- name: blocks_multiply_const_vxx_1
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: Remove overshoot
+    const: 1/2
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [424, 764.0]
+    rotation: 0
+    state: disabled
+- name: blocks_stream_to_vector_1
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: zmq_size
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1616, 544.0]
+    rotation: 0
+    state: disabled
+- name: blocks_stream_to_vector_2
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: zmq_size
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1616, 408.0]
+    rotation: 0
+    state: enabled
+- name: blocks_uchar_to_float_0
+  id: blocks_uchar_to_float
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [216, 216.0]
+    rotation: 0
+    state: disabled
+- name: digital_constellation_modulator_0
+  id: digital_constellation_modulator
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: qam_constellation
+    differential: 'False'
+    excess_bw: '0.2'
+    log: 'False'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_symbol: sps
+    truncate: 'False'
+    verbose: 'False'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [208, 740.0]
+    rotation: 0
+    state: disabled
+- name: digital_symbol_sync_xx_0_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: digital.constellation_bpsk().base()
+    damping: '1.0'
+    loop_bw: 2.0*math.pi*0.000015
+    max_dev: '0.005'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: '128'
+    osps: '10'
+    pfb_mf_taps: '[]'
+    resamp_type: digital.IR_MMSE_8TAP
+    sps: '10'
+    ted_gain: '1.0'
+    ted_type: digital.TED_GARDNER
+    type: ff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1312, 484.0]
+    rotation: 0
+    state: disabled
+- name: fir_filter_xxx_0
+  id: fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: '[0.004562185464, -0.003315159603, 0.004494660764, -0.005933215824, 0.007662642297,
+      -0.009730151262, 0.012163462902, -0.015021624093, 0.018344736003, -0.022179571087,
+      0.026587935938, -0.031624350959, 0.037349001966, -0.043825719260, 0.051125585868,
+      -0.059326237377, 0.068504390315, -0.078746186598, 0.090147725138, -0.102813489566,
+      0.116858526852, -0.132408962019, 0.149609118181, -0.168623734209, 0.189641904748,
+      -0.212886091306, 0.238618491973, -0.267152027409, 0.298864858677, -0.334221364400,
+      0.373800820471, -0.418331953197, 0.468744199982, -0.526240588097, 0.592399581386,
+      -0.669319857641, 0.759823522591, -0.867734659884, 0.998215908414, -1.158013367129,
+      1.354923496534, -1.593658456679, 1.856602265650, -2.021519762741, 1.526746272983,
+      1.526746272983, -2.021519762741, 1.856602265650, -1.593658456679, 1.354923496534,
+      -1.158013367129, 0.998215908414, -0.867734659884, 0.759823522591, -0.669319857641,
+      0.592399581386, -0.526240588097, 0.468744199982, -0.418331953197, 0.373800820471,
+      -0.334221364400, 0.298864858677, -0.267152027409, 0.238618491973, -0.212886091306,
+      0.189641904748, -0.168623734209, 0.149609118181, -0.132408962019, 0.116858526852,
+      -0.102813489566, 0.090147725138, -0.078746186598, 0.068504390315, -0.059326237377,
+      0.051125585868, -0.043825719260, 0.037349001966, -0.031624350959, 0.026587935938,
+      -0.022179571087, 0.018344736003, -0.015021624093, 0.012163462902, -0.009730151262,
+      0.007662642297, -0.005933215824, 0.004494660764, -0.003315159603, 0.004562185464]'
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 396.0]
+    rotation: 0
+    state: enabled
+- name: fir_filter_xxx_0_0
+  id: fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: '[-0.004922351175, 0.003062312786, -0.003988005723, 0.005093026471, -0.006387910595,
+      0.007891072265, -0.009631151264, 0.011632714520, -0.013916801818, 0.016510602853,
+      -0.019447899813, 0.022762725822, -0.026489053160, 0.030666304328, -0.035341805576,
+      0.040569413853, -0.046410234359, 0.052936430186, -0.060234822845, 0.068410565967,
+      -0.077593809312, 0.087949364525, -0.099688344119, 0.113084649942, -0.128501675734,
+      0.146433855322, -0.167570246996, 0.192896588415, -0.223867016653, 0.262703169287,
+      -0.312935247724, 0.380411431327, -0.475149638186, 0.613934011379, -0.814825613620,
+      0.966352417857, 0.966352417857, -0.814825613620, 0.613934011379, -0.475149638186,
+      0.380411431327, -0.312935247724, 0.262703169287, -0.223867016653, 0.192896588415,
+      -0.167570246996, 0.146433855322, -0.128501675734, 0.113084649942, -0.099688344119,
+      0.087949364525, -0.077593809312, 0.068410565967, -0.060234822845, 0.052936430186,
+      -0.046410234359, 0.040569413853, -0.035341805576, 0.030666304328, -0.026489053160,
+      0.022762725822, -0.019447899813, 0.016510602853, -0.013916801818, 0.011632714520,
+      -0.009631151264, 0.007891072265, -0.006387910595, 0.005093026471, -0.003988005723,
+      0.003062312786, -0.004922351175]'
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [864, 756.0]
+    rotation: 0
+    state: disabled
+- name: freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    center_freq: 25e3
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    taps: lpf_taps
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1336, 300.0]
+    rotation: 0
+    state: disabled
+- name: import_0
+  id: import
+  parameters:
+    alias: ''
+    comment: ''
+    imports: import numpy as np
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [392, 12.0]
+    rotation: 0
+    state: enabled
+- name: import_0_0
+  id: import
+  parameters:
+    alias: ''
+    comment: ''
+    imports: from commpy.modulation import QAMModem
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [472, 12.0]
+    rotation: 0
+    state: disabled
+- name: low_pass_filter_0
+  id: low_pass_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    beta: '6.76'
+    comment: ''
+    cutoff_freq: 6.25e3
+    decim: '1'
+    gain: '1'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    type: fir_filter_ccf
+    width: 6.25e3
+    win: window.WIN_HAMMING
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [560, 500.0]
+    rotation: 0
+    state: disabled
+- name: network_udp_sink_0
+  id: network_udp_sink
+  parameters:
+    addr: 127.0.0.1
+    affinity: ''
+    alias: ''
+    comment: ''
+    header: '0'
+    payloadsize: '1472'
+    port: '42001'
+    send_eof: 'False'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1760, 180.0]
+    rotation: 0
+    state: disabled
+- name: rational_resampler_xxx_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '48'
+    fbw: '0'
+    interp: '125'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1008, 188.0]
+    rotation: 0
+    state: disabled
+- name: rational_resampler_xxx_0_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '4'
+    fbw: '0'
+    interp: '3'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [648, 740.0]
+    rotation: 0
+    state: disabled
+- name: rational_resampler_xxx_1
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '125'
+    fbw: '0'
+    interp: '48'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [752, 516.0]
+    rotation: 0
+    state: disabled
+- name: rational_resampler_xxx_2
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '125'
+    fbw: '0'
+    interp: '36'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1568, 188.0]
+    rotation: 0
+    state: disabled
+- name: root_raised_cosine_filter_0
+  id: root_raised_cosine_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha: '0.5'
+    comment: ''
+    decim: '1'
+    gain: '10'
+    interp: '10'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ntaps: 8*10+1
+    samp_rate: '10'
+    sym_rate: '1'
+    type: interp_fir_filter_fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [632, 172.0]
+    rotation: 0
+    state: disabled
+- name: root_raised_cosine_filter_1
+  id: root_raised_cosine_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha: '0.5'
+    comment: ''
+    decim: '1'
+    gain: '1'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ntaps: 8*10+1
+    samp_rate: '10'
+    sym_rate: '1'
+    type: fir_filter_fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1104, 500.0]
+    rotation: 0
+    state: disabled
+- name: zeromq_pub_sink_0
+  id: zeromq_pub_sink
+  parameters:
+    address: tcp://*:17001
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    drop_on_hwm: 'True'
+    hwm: '-1'
+    key: ''
+    pass_tags: 'False'
+    timeout: '150'
+    type: complex
+    vlen: zmq_size
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1776, 364.0]
+    rotation: 0
+    state: enabled
+- name: zeromq_pub_sink_0_0
+  id: zeromq_pub_sink
+  parameters:
+    address: tcp://*:17001
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    drop_on_hwm: 'True'
+    hwm: '-1'
+    key: ''
+    pass_tags: 'False'
+    timeout: '150'
+    type: float
+    vlen: zmq_size
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1776, 500.0]
+    rotation: 0
+    state: disabled
+
+connections:
+- [analog_const_source_x_0, '0', blocks_complex_to_float_0, '0']
+- [analog_frequency_modulator_fc_0, '0', rational_resampler_xxx_0, '0']
+- [analog_quadrature_demod_cf_0, '0', root_raised_cosine_filter_1, '0']
+- [analog_random_uniform_source_x_0, '0', blocks_uchar_to_float_0, '0']
+- [analog_random_uniform_source_x_0_0, '0', digital_constellation_modulator_0, '0']
+- [audio_source_0, '0', blocks_float_to_complex_0, '0']
+- [audio_source_0, '1', blocks_float_to_complex_0, '1']
+- [blocks_add_const_vxx_0, '0', blocks_multiply_const_vxx_0, '0']
+- [blocks_complex_to_float_0, '0', audio_sink_0, '0']
+- [blocks_complex_to_float_0, '1', audio_sink_0, '1']
+- [blocks_complex_to_float_0_0, '0', audio_sink_0_0, '0']
+- [blocks_complex_to_float_0_0, '1', audio_sink_0_0, '1']
+- [blocks_correctiq_0, '0', blocks_stream_to_vector_2, '0']
+- [blocks_correctiq_0, '0', freq_xlating_fir_filter_xxx_0, '0']
+- [blocks_float_to_complex_0, '0', fir_filter_xxx_0, '0']
+- [blocks_multiply_const_vxx_0, '0', root_raised_cosine_filter_0, '0']
+- [blocks_multiply_const_vxx_1, '0', rational_resampler_xxx_0_0, '0']
+- [blocks_stream_to_vector_1, '0', zeromq_pub_sink_0_0, '0']
+- [blocks_stream_to_vector_2, '0', zeromq_pub_sink_0, '0']
+- [blocks_uchar_to_float_0, '0', blocks_add_const_vxx_0, '0']
+- [digital_constellation_modulator_0, '0', blocks_multiply_const_vxx_1, '0']
+- [digital_symbol_sync_xx_0_0, '0', blocks_stream_to_vector_1, '0']
+- [fir_filter_xxx_0, '0', blocks_correctiq_0, '0']
+- [fir_filter_xxx_0, '0', low_pass_filter_0, '0']
+- [fir_filter_xxx_0_0, '0', blocks_complex_to_float_0_0, '0']
+- [freq_xlating_fir_filter_xxx_0, '0', rational_resampler_xxx_2, '0']
+- [low_pass_filter_0, '0', rational_resampler_xxx_1, '0']
+- [rational_resampler_xxx_0, '0', blocks_complex_to_float_0, '0']
+- [rational_resampler_xxx_0_0, '0', fir_filter_xxx_0_0, '0']
+- [rational_resampler_xxx_1, '0', analog_quadrature_demod_cf_0, '0']
+- [rational_resampler_xxx_2, '0', network_udp_sink_0, '0']
+- [root_raised_cosine_filter_0, '0', analog_frequency_modulator_fc_0, '0']
+- [root_raised_cosine_filter_1, '0', digital_symbol_sync_xx_0_0, '0']
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
