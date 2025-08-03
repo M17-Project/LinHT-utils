@@ -11,7 +11,7 @@ options:
     gen_linking: dynamic
     generate_options: no_gui
     hier_block_src_path: '.:'
-    id: default
+    id: som_fm_ctcss
     max_nouts: '0'
     output_language: python
     placement: (0,0)
@@ -66,6 +66,41 @@ blocks:
     coordinate: [872, 548.0]
     rotation: 0
     state: enabled
+- name: analog_fm_deemph_0
+  id: analog_fm_deemph
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: '8000'
+    tau: emph*1e-6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1056, 580.0]
+    rotation: 0
+    state: enabled
+- name: analog_fm_preemph_0
+  id: analog_fm_preemph
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    fh: '-1.0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: '8000'
+    tau: emph*1e-6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [224, 268.0]
+    rotation: 0
+    state: enabled
 - name: analog_frequency_modulator_fc_0
   id: analog_frequency_modulator_fc
   parameters:
@@ -74,12 +109,12 @@ blocks:
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    sensitivity: (2.0*np.pi*(bw+1)*5e3)/8000.0
+    sensitivity: (2.0*np.pi*(bw+1)*2.5e3)/8000.0
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [520, 300.0]
+    coordinate: [688, 300.0]
     rotation: 0
     state: enabled
 - name: analog_quadrature_demod_cf_0
@@ -88,7 +123,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    gain: 32e3/(2.0*np.pi*(bw+1)*5e3)
+    gain: 32e3/(2.0*np.pi*(bw+1)*2.5e3)
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
@@ -118,7 +153,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [200, 380.0]
+    coordinate: [368, 380.0]
     rotation: 0
     state: enabled
 - name: audio_sink_0_0
@@ -135,7 +170,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1008, 288.0]
+    coordinate: [1288, 288.0]
     rotation: 0
     state: enabled
 - name: audio_sink_0_0_0
@@ -152,7 +187,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1224, 580.0]
+    coordinate: [1376, 580.0]
     rotation: 0
     state: enabled
 - name: audio_source_0
@@ -215,7 +250,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [224, 236.0]
+    coordinate: [392, 236.0]
     rotation: 0
     state: enabled
 - name: band_pass_filter_0_0
@@ -240,7 +275,25 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1056, 540.0]
+    coordinate: [1208, 540.0]
+    rotation: 0
+    state: enabled
+- name: blocks_add_const_vxx_0
+  id: blocks_add_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: iqdc
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1008, 300.0]
     rotation: 0
     state: enabled
 - name: blocks_add_xx_0
@@ -258,7 +311,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [440, 288.0]
+    coordinate: [608, 288.0]
     rotation: 0
     state: enabled
 - name: blocks_complex_to_float_0
@@ -274,7 +327,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [848, 288.0]
+    coordinate: [1128, 288.0]
     rotation: 0
     state: enabled
 - name: blocks_float_to_complex_1
@@ -329,6 +382,23 @@ blocks:
     bus_source: false
     bus_structure: null
     coordinate: [432, 12.0]
+    rotation: 0
+    state: enabled
+- name: emph
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: De/preemphasis time constant in microseconds
+    short_id: e
+    type: eng_float
+    value: '75'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [600, 12.0]
     rotation: 0
     state: enabled
 - name: import_0
@@ -402,7 +472,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [680, 276.0]
+    coordinate: [840, 276.0]
     rotation: 0
     state: enabled
 - name: rational_resampler_xxx_1
@@ -427,21 +497,24 @@ blocks:
     state: enabled
 
 connections:
-- [analog_ctcss_squelch_ff_0, '0', band_pass_filter_0_0, '0']
+- [analog_ctcss_squelch_ff_0, '0', analog_fm_deemph_0, '0']
+- [analog_fm_deemph_0, '0', band_pass_filter_0_0, '0']
+- [analog_fm_preemph_0, '0', band_pass_filter_0, '0']
 - [analog_frequency_modulator_fc_0, '0', rational_resampler_xxx_0, '0']
 - [analog_quadrature_demod_cf_0, '0', analog_ctcss_squelch_ff_0, '0']
 - [analog_sig_source_x_0, '0', blocks_add_xx_0, '1']
-- [audio_source_0, '0', band_pass_filter_0, '0']
+- [audio_source_0, '0', analog_fm_preemph_0, '0']
 - [audio_source_0_0, '0', blocks_float_to_complex_1, '0']
 - [audio_source_0_0, '1', blocks_float_to_complex_1, '1']
 - [band_pass_filter_0, '0', blocks_add_xx_0, '0']
 - [band_pass_filter_0_0, '0', audio_sink_0_0_0, '0']
+- [blocks_add_const_vxx_0, '0', blocks_complex_to_float_0, '0']
 - [blocks_add_xx_0, '0', analog_frequency_modulator_fc_0, '0']
 - [blocks_complex_to_float_0, '0', audio_sink_0_0, '0']
 - [blocks_complex_to_float_0, '1', audio_sink_0_0, '1']
 - [blocks_float_to_complex_1, '0', low_pass_filter_0, '0']
 - [low_pass_filter_0, '0', rational_resampler_xxx_1, '0']
-- [rational_resampler_xxx_0, '0', blocks_complex_to_float_0, '0']
+- [rational_resampler_xxx_0, '0', blocks_add_const_vxx_0, '0']
 - [rational_resampler_xxx_1, '0', analog_quadrature_demod_cf_0, '0']
 
 metadata:

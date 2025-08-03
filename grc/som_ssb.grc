@@ -309,7 +309,7 @@ blocks:
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    num_taps: '121'
+    num_taps: '201'
     win: window.WIN_HAMMING
   states:
     bus_sink: false
@@ -405,11 +405,13 @@ blocks:
   id: parameter
   parameters:
     alias: ''
-    comment: '0 - LSB
+    comment: 'Sideband selection:
+
+      0 - LSB
 
       1 - USB (default)'
     hide: none
-    label: IQ DC offset
+    label: Sideband
     short_id: s
     type: intx
     value: '1'
