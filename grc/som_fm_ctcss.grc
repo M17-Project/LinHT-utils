@@ -74,7 +74,7 @@ blocks:
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    samp_rate: '8000'
+    samp_rate: '32000'
     tau: emph*1e-6
   states:
     bus_sink: false
