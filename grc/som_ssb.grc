@@ -67,7 +67,7 @@ blocks:
   parameters:
     affinity: ''
     alias: ''
-    comment: Baseband output
+    comment: Audio output
     device_name: hw:wm8960audio
     num_inputs: '1'
     ok_to_block: 'True'
@@ -341,7 +341,9 @@ blocks:
     affinity: ''
     alias: ''
     beta: '6.76'
-    comment: ''
+    comment: 'Channelizer
+
+      (pass both sidebands)'
     cutoff_freq: '3000'
     decim: '1'
     gain: '1'
