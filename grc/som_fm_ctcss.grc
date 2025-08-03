@@ -58,7 +58,7 @@ blocks:
     maxoutbuf: '0'
     minoutbuf: '0'
     ramp: '0'
-    rate: 32e3
+    rate: int(32e3)
   states:
     bus_sink: false
     bus_source: false
