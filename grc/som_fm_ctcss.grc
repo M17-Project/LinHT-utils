@@ -109,12 +109,12 @@ blocks:
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    sensitivity: (2.0*np.pi*(bw+1)*2.5e3)/8000.0
+    sensitivity: (2.0*np.pi*(bw+1)*2.5e3)/32000.0
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [688, 300.0]
+    coordinate: [856, 300.0]
     rotation: 0
     state: enabled
 - name: analog_quadrature_demod_cf_0
@@ -170,7 +170,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1288, 288.0]
+    coordinate: [1472, 288.0]
     rotation: 0
     state: enabled
 - name: audio_sink_0_0_0
@@ -293,7 +293,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1008, 300.0]
+    coordinate: [1192, 300.0]
     rotation: 0
     state: enabled
 - name: blocks_add_xx_0
@@ -327,7 +327,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1128, 288.0]
+    coordinate: [1312, 288.0]
     rotation: 0
     state: enabled
 - name: blocks_float_to_complex_1
@@ -461,7 +461,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    decim: '8'
+    decim: 4*8
     fbw: '0'
     interp: '500'
     maxoutbuf: '0'
@@ -472,7 +472,27 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [840, 276.0]
+    coordinate: [1024, 276.0]
+    rotation: 0
+    state: enabled
+- name: rational_resampler_xxx_0_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    fbw: '0'
+    interp: '4'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [688, 276.0]
     rotation: 0
     state: enabled
 - name: rational_resampler_xxx_1
@@ -509,12 +529,13 @@ connections:
 - [band_pass_filter_0, '0', blocks_add_xx_0, '0']
 - [band_pass_filter_0_0, '0', audio_sink_0_0_0, '0']
 - [blocks_add_const_vxx_0, '0', blocks_complex_to_float_0, '0']
-- [blocks_add_xx_0, '0', analog_frequency_modulator_fc_0, '0']
+- [blocks_add_xx_0, '0', rational_resampler_xxx_0_0, '0']
 - [blocks_complex_to_float_0, '0', audio_sink_0_0, '0']
 - [blocks_complex_to_float_0, '1', audio_sink_0_0, '1']
 - [blocks_float_to_complex_1, '0', low_pass_filter_0, '0']
 - [low_pass_filter_0, '0', rational_resampler_xxx_1, '0']
 - [rational_resampler_xxx_0, '0', blocks_add_const_vxx_0, '0']
+- [rational_resampler_xxx_0_0, '0', analog_frequency_modulator_fc_0, '0']
 - [rational_resampler_xxx_1, '0', analog_quadrature_demod_cf_0, '0']
 
 metadata:
