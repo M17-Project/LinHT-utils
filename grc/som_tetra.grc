@@ -19,7 +19,7 @@ options:
     realtime_scheduling: ''
     run: 'True'
     run_command: '{python} -u {filename}'
-    run_options: prompt
+    run_options: run
     sizing_mode: fixed
     thread_safe_setters: ''
     title: TETRA demo
@@ -33,24 +33,6 @@ options:
     state: enabled
 
 blocks:
-- name: ch_flt
-  id: variable_low_pass_filter_taps
-  parameters:
-    beta: '6.76'
-    comment: ''
-    cutoff_freq: 12.5e3
-    gain: '1.0'
-    samp_rate: samp_rate
-    value: ''
-    width: 12.5e3
-    win: window.WIN_HAMMING
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [568, 188.0]
-    rotation: 0
-    state: enabled
 - name: samp_rate
   id: variable
   parameters:
@@ -63,13 +45,25 @@ blocks:
     coordinate: [200, 12]
     rotation: 0
     state: enabled
+- name: zmq_size
+  id: variable
+  parameters:
+    comment: ''
+    value: 2**11
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [296, 12.0]
+    rotation: 0
+    state: enabled
 - name: audio_source_0
   id: audio_source
   parameters:
     affinity: ''
     alias: ''
     comment: ''
-    device_name: '"hw:0,0"'
+    device_name: bsb_device
     maxoutbuf: '0'
     minoutbuf: '0'
     num_outputs: '2'
@@ -79,7 +73,22 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [8, 312.0]
+    coordinate: [16, 192.0]
+    rotation: 0
+    state: enabled
+- name: blocks_correctiq_0
+  id: blocks_correctiq
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [544, 208.0]
     rotation: 0
     state: enabled
 - name: blocks_float_to_complex_0
@@ -95,7 +104,42 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [184, 312.0]
+    coordinate: [184, 192.0]
+    rotation: 0
+    state: enabled
+- name: blocks_stream_to_vector_2
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: zmq_size
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [192, 336.0]
+    rotation: 0
+    state: enabled
+- name: bsb_device
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: Baseband source device (SX1255)
+    short_id: d
+    type: str
+    value: hw:0,0
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [392, 12.0]
     rotation: 0
     state: enabled
 - name: fir_filter_xxx_0
@@ -131,27 +175,31 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [352, 316.0]
+    coordinate: [344, 196.0]
     rotation: 0
     state: enabled
-- name: freq_xlating_fir_filter_xxx_0
-  id: freq_xlating_fir_filter_xxx
+- name: low_pass_filter_0
+  id: low_pass_filter
   parameters:
     affinity: ''
     alias: ''
-    center_freq: 100e3
+    beta: '6.76'
     comment: ''
+    cutoff_freq: 12.5e3
     decim: '1'
+    gain: '1'
+    interp: '1'
     maxoutbuf: '0'
     minoutbuf: '0'
     samp_rate: samp_rate
-    taps: ch_flt
-    type: ccc
+    type: fir_filter_ccf
+    width: 12.5e3
+    win: window.WIN_HAMMING
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [560, 316.0]
+    coordinate: [728, 164.0]
     rotation: 0
     state: enabled
 - name: network_udp_sink_0
@@ -171,7 +219,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [952, 308.0]
+    coordinate: [344, 444.0]
     rotation: 0
     state: enabled
 - name: rational_resampler_xxx_0
@@ -191,17 +239,96 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [784, 316.0]
+    coordinate: [176, 452.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_0
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: baseband
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [728, 116.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_1
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: channel
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [912, 204.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: channel
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [24, 476.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_1
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: baseband
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [24, 332.0]
+    rotation: 0
+    state: enabled
+- name: zeromq_pub_sink_0
+  id: zeromq_pub_sink
+  parameters:
+    address: tcp://*:17001
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    drop_on_hwm: 'True'
+    hwm: '-1'
+    key: ''
+    pass_tags: 'False'
+    timeout: '150'
+    type: complex
+    vlen: zmq_size
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [344, 292.0]
     rotation: 0
     state: enabled
 
 connections:
 - [audio_source_0, '0', blocks_float_to_complex_0, '0']
 - [audio_source_0, '1', blocks_float_to_complex_0, '1']
+- [blocks_correctiq_0, '0', low_pass_filter_0, '0']
+- [blocks_correctiq_0, '0', virtual_sink_0, '0']
 - [blocks_float_to_complex_0, '0', fir_filter_xxx_0, '0']
-- [fir_filter_xxx_0, '0', freq_xlating_fir_filter_xxx_0, '0']
-- [freq_xlating_fir_filter_xxx_0, '0', rational_resampler_xxx_0, '0']
+- [blocks_stream_to_vector_2, '0', zeromq_pub_sink_0, '0']
+- [fir_filter_xxx_0, '0', blocks_correctiq_0, '0']
+- [low_pass_filter_0, '0', virtual_sink_1, '0']
 - [rational_resampler_xxx_0, '0', network_udp_sink_0, '0']
+- [virtual_source_0, '0', rational_resampler_xxx_0, '0']
+- [virtual_source_1, '0', blocks_stream_to_vector_2, '0']
 
 metadata:
   file_format: 1
