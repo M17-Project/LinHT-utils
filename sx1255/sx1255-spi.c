@@ -5,6 +5,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <math.h>
+#include <errno.h>
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
 #include <gpiod.h>
@@ -14,10 +15,10 @@
 
 // --- Configuration ---
 #define CLK_FREQ (32.0e6f)
-#define RST_PIN_OFFSET 537 // The GPIO line offset
+#define RST_PIN_OFFSET 22 // GPIO pin 22 on gpiochip0 for reset
 
 const char *spi_device = "/dev/spidev0.0";
-const char *gpio_chip_name = "gpiochip0"; // Use `gpiodetect` to verify
+const char *gpio_chip_path = "/dev/gpiochip0"; // Use device path for gpiod V2
 
 // --- Global libgpiod handles ---
 struct gpiod_chip *chip_v2;
@@ -191,9 +192,9 @@ int8_t sx1255_setrate(rate_t r)
 
 int gpio_init(void) {
     // Open the GPIO chip
-    chip_v2 = gpiod_chip_open(gpio_chip_name);
+    chip_v2 = gpiod_chip_open(gpio_chip_path);
     if (!chip_v2) {
-        perror("Error opening GPIO chip");
+        fprintf(stderr, "Error opening GPIO chip '%s': %s\n", gpio_chip_path, strerror(errno));
         return -1;
     }
 
@@ -219,7 +220,8 @@ int gpio_init(void) {
     // Add the settings for our specific line (by offset) to the config
     unsigned int offsets[] = {RST_PIN_OFFSET};
     if (gpiod_line_config_add_line_settings(line_cfg, offsets, 1, settings) != 0) {
-        perror("Error adding line settings to config");
+        fprintf(stderr, "Error adding line settings to config for pin %d: %s\n",
+                RST_PIN_OFFSET, strerror(errno));
         gpiod_line_config_free(line_cfg);
         gpiod_line_settings_free(settings);
         gpiod_chip_close(chip_v2);
@@ -246,7 +248,8 @@ int gpio_init(void) {
     gpiod_line_settings_free(settings);
 
     if (!rst_line_request) {
-        perror("Error requesting GPIO lines");
+        fprintf(stderr, "Error requesting GPIO lines for pin %d: %s\n",
+                RST_PIN_OFFSET, strerror(errno));
         gpiod_chip_close(chip_v2);
         return -1;
     }
@@ -254,10 +257,11 @@ int gpio_init(void) {
 }
 
 int rst(uint8_t state) {
-    // Set value using the 3-argument function: (request, index, value)
-    // Since we requested one line, its index in the request is 0.
-    if (gpiod_line_request_set_value(rst_line_request, 0, state) < 0) {
-        perror("Error setting GPIO line value");
+    // Set value using gpiod V2 API
+    enum gpiod_line_value values[] = {state ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE};
+    if (gpiod_line_request_set_values(rst_line_request, values) < 0) {
+        fprintf(stderr, "Error setting GPIO line value for pin %d to state %d: %s\n",
+                RST_PIN_OFFSET, state, strerror(errno));
         return 1;
     }
     return 0;
@@ -303,11 +307,11 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    /*if(gpio_init() != 0)
+    if(gpio_init() != 0)
     {
         fprintf(stderr, "Can not initialize RST pin\nExiting\n");
         return -1;
-    }*/
+    }
 
     // Define the long options
     static struct option long_options[] =
@@ -341,11 +345,12 @@ int main(int argc, char *argv[])
         {
             case 'R': // reset
                 printf("Resetting device...\n");
-                /*usleep(100000U);
+                usleep(100000U);
                 rst(1);
                 usleep(100000U);
                 rst(0);
-                usleep(250000U);*/
+                usleep(250000U);
+                printf("Device reset completed\n");
                 gpio_cleanup();
                 return 0;
             break;
@@ -475,11 +480,12 @@ int main(int argc, char *argv[])
     }
 
     //device reset
-    /*usleep(100000U);
+    printf("Performing device reset...\n");
+    usleep(100000U);
     rst(1);
     usleep(100000U);
     rst(0);
-    usleep(250000U);*/
+    usleep(250000U);
 
     uint8_t val = sx1255_readreg(0x07);
     printf("SX1255 version 0x%02X", val);
