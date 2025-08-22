@@ -1,0 +1,456 @@
+options:
+  parameters:
+    author: Wojciech SP5WWP
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: M17 Foundation 2025
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: no_gui
+    hier_block_src_path: '.:'
+    id: default
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: run
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: M17 test receiver
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 12.0]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: '48000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 12.0]
+    rotation: 0
+    state: enabled
+- name: analog_quadrature_demod_cf_0
+  id: analog_quadrature_demod_cf
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gain: 48e3/(2.0*math.pi*800.0)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1048, 196.0]
+    rotation: 0
+    state: enabled
+- name: aud_sink
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: Audio device
+    short_id: a
+    type: str
+    value: hw:0,0
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [472, 12.0]
+    rotation: 0
+    state: true
+- name: audio_sink_0
+  id: audio_sink
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: aud_sink
+    num_inputs: '1'
+    ok_to_block: 'True'
+    samp_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1448, 340.0]
+    rotation: 0
+    state: true
+- name: audio_source_0
+  id: audio_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: bsb_src
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_outputs: '2'
+    ok_to_block: 'True'
+    samp_rate: '500000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 184.0]
+    rotation: 0
+    state: true
+- name: blocks_correctiq_0
+  id: blocks_correctiq
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [536, 200.0]
+    rotation: 0
+    state: enabled
+- name: blocks_float_to_complex_0
+  id: blocks_float_to_complex
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 184.0]
+    rotation: 0
+    state: true
+- name: blocks_packed_to_unpacked_xx_0
+  id: blocks_packed_to_unpacked_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    bits_per_chunk: '1'
+    comment: ''
+    endianness: gr.GR_MSB_FIRST
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_ports: '1'
+    type: byte
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [624, 340.0]
+    rotation: 0
+    state: enabled
+- name: blocks_short_to_float_0
+  id: blocks_short_to_float
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    scale: 2**15
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1144, 348.0]
+    rotation: 0
+    state: true
+- name: blocks_stream_to_vector_2
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: '64'
+    type: byte
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [800, 352.0]
+    rotation: 0
+    state: enabled
+- name: bsb_src
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: Baseband source device
+    short_id: b
+    type: str
+    value: hw:1,0
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [296, 12.0]
+    rotation: 0
+    state: true
+- name: digital_symbol_sync_xx_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: digital.constellation_bpsk().base()
+    damping: '1.0'
+    loop_bw: 2*math.pi*0.00015
+    max_dev: '0.005'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: '128'
+    osps: '1'
+    pfb_mf_taps: '[]'
+    resamp_type: digital.IR_MMSE_8TAP
+    sps: '10'
+    ted_gain: '1.0'
+    ted_type: digital.TED_GARDNER
+    type: ff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [176, 356.0]
+    rotation: 0
+    state: enabled
+- name: fir_filter_xxx_0
+  id: fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: '[0.004562185464, -0.003315159603, 0.004494660764, -0.005933215824, 0.007662642297,
+      -0.009730151262, 0.012163462902, -0.015021624093, 0.018344736003, -0.022179571087,
+      0.026587935938, -0.031624350959, 0.037349001966, -0.043825719260, 0.051125585868,
+      -0.059326237377, 0.068504390315, -0.078746186598, 0.090147725138, -0.102813489566,
+      0.116858526852, -0.132408962019, 0.149609118181, -0.168623734209, 0.189641904748,
+      -0.212886091306, 0.238618491973, -0.267152027409, 0.298864858677, -0.334221364400,
+      0.373800820471, -0.418331953197, 0.468744199982, -0.526240588097, 0.592399581386,
+      -0.669319857641, 0.759823522591, -0.867734659884, 0.998215908414, -1.158013367129,
+      1.354923496534, -1.593658456679, 1.856602265650, -2.021519762741, 1.526746272983,
+      1.526746272983, -2.021519762741, 1.856602265650, -1.593658456679, 1.354923496534,
+      -1.158013367129, 0.998215908414, -0.867734659884, 0.759823522591, -0.669319857641,
+      0.592399581386, -0.526240588097, 0.468744199982, -0.418331953197, 0.373800820471,
+      -0.334221364400, 0.298864858677, -0.267152027409, 0.238618491973, -0.212886091306,
+      0.189641904748, -0.168623734209, 0.149609118181, -0.132408962019, 0.116858526852,
+      -0.102813489566, 0.090147725138, -0.078746186598, 0.068504390315, -0.059326237377,
+      0.051125585868, -0.043825719260, 0.037349001966, -0.031624350959, 0.026587935938,
+      -0.022179571087, 0.018344736003, -0.015021624093, 0.012163462902, -0.009730151262,
+      0.007662642297, -0.005933215824, 0.004494660764, -0.003315159603, 0.004562185464]'
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [336, 188.0]
+    rotation: 0
+    state: enabled
+- name: low_pass_filter_0
+  id: low_pass_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    beta: '6.76'
+    comment: ''
+    cutoff_freq: 6.25e3
+    decim: '1'
+    gain: '1'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    type: fir_filter_ccf
+    width: 6.25e3
+    win: window.WIN_HAMMING
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [696, 148.0]
+    rotation: 0
+    state: enabled
+- name: m17_m17_decoder_0
+  id: m17_m17_decoder
+  parameters:
+    affinity: ''
+    alias: ''
+    callsign: 'True'
+    comment: ''
+    debug_ctrl: 'False'
+    debug_data: 'True'
+    encr_type: '0'
+    key: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    seed: ''
+    signed_str: 'False'
+    threshold: '2.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [456, 308.0]
+    rotation: 0
+    state: enabled
+- name: rational_resampler_xxx_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '500'
+    fbw: '0'
+    interp: '48'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [880, 172.0]
+    rotation: 0
+    state: enabled
+- name: rational_resampler_xxx_1
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    fbw: '0'
+    interp: int(48/8)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: '[]'
+    type: fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1280, 324.0]
+    rotation: 0
+    state: true
+- name: root_raised_cosine_filter_0
+  id: root_raised_cosine_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha: '0.5'
+    comment: ''
+    decim: '1'
+    gain: '1'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ntaps: 8*10+1
+    samp_rate: '10'
+    sym_rate: '1'
+    type: fir_filter_fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1216, 156.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_0
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: baseband
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1424, 196.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: baseband
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 412.0]
+    rotation: 0
+    state: enabled
+- name: vocoder_codec2_decode_ps_0
+  id: vocoder_codec2_decode_ps
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    mode: codec2.MODE_3200
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [952, 348.0]
+    rotation: 0
+    state: enabled
+
+connections:
+- [analog_quadrature_demod_cf_0, '0', root_raised_cosine_filter_0, '0']
+- [audio_source_0, '0', blocks_float_to_complex_0, '0']
+- [audio_source_0, '1', blocks_float_to_complex_0, '1']
+- [blocks_correctiq_0, '0', low_pass_filter_0, '0']
+- [blocks_float_to_complex_0, '0', fir_filter_xxx_0, '0']
+- [blocks_packed_to_unpacked_xx_0, '0', blocks_stream_to_vector_2, '0']
+- [blocks_short_to_float_0, '0', rational_resampler_xxx_1, '0']
+- [blocks_stream_to_vector_2, '0', vocoder_codec2_decode_ps_0, '0']
+- [digital_symbol_sync_xx_0, '0', m17_m17_decoder_0, '0']
+- [fir_filter_xxx_0, '0', blocks_correctiq_0, '0']
+- [low_pass_filter_0, '0', rational_resampler_xxx_0, '0']
+- [m17_m17_decoder_0, '0', blocks_packed_to_unpacked_xx_0, '0']
+- [rational_resampler_xxx_0, '0', analog_quadrature_demod_cf_0, '0']
+- [rational_resampler_xxx_1, '0', audio_sink_0, '0']
+- [root_raised_cosine_filter_0, '0', virtual_sink_0, '0']
+- [virtual_source_0, '0', digital_symbol_sync_xx_0, '0']
+- [vocoder_codec2_decode_ps_0, '0', blocks_short_to_float_0, '0']
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.7.0
