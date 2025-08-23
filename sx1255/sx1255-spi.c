@@ -40,8 +40,10 @@ typedef enum
 //default settings
 uint32_t rxf = 433.475e6;
 uint32_t txf = 438e6;
-float mix_gain = 14.0f;  //-9.5dB
-int8_t dac_gain = 2;    //-3dB
+float mix_gain = 14.0f;     //-9.5dB
+int8_t dac_gain = 2;        //-3dB
+uint8_t lna_gain = 1;       //48dB
+uint8_t pga_gain = 15;      //+30dB
 rate_t rate = RATE_125K;
 
 int spi_init(char *dev) {
@@ -287,6 +289,8 @@ void print_help(const char *program_name)
     printf("  -t, --txf=FREQ        Transmit frequency (Hz)\n");
     printf("  -d, --dac_gain=GAIN   DAC gain (dB)\n");
     printf("  -m, --mix_gain=GAIN   Mixer gain (dB)\n");
+    printf("  -l, --lna_gain=GAIN   RX LNA gain (0..48dB)\n");
+    printf("  -p, --pga_gain=GAIN   RX PGA gain (0..30dB)\n");
     printf("  -h, --help            Display this help message and exit\n");
     printf("\n");
     printf("Example:\n");
@@ -322,6 +326,8 @@ int main(int argc, char *argv[])
         {"txf",         required_argument, 0, 't'},
         {"dac_gain",    required_argument, 0, 'd'},
         {"mix_gain",    required_argument, 0, 'm'},
+        {"lna_gain",    required_argument, 0, 'l'},
+        {"pga_gain",    required_argument, 0, 'p'},
         {"help",        no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
@@ -442,11 +448,13 @@ int main(int argc, char *argv[])
                     else
                     {
                         printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
+                        dac_gain = 2;
                     }
                 }
                 else
                 {
                     printf("Invalid DAC gain. Using -3 dB.\n");
+                    dac_gain = 2;
                 }
             break;
             
@@ -463,11 +471,88 @@ int main(int argc, char *argv[])
                     else
                     {
                         printf("Invalid mixer gain. Using -9.5 dB.\n");
+                        mix_gain = 0x0E;
                     }
                 }
                 else
                 {
                     printf("Invalid mixer gain. Using -9.5 dB.\n");
+                    mix_gain = 0x0E;
+                }
+            break;
+
+            case 'l': //lna gain
+                if(strlen(optarg)>0)
+                {
+                    lna_gain = atoi(optarg);
+                    if(lna_gain<=48)
+                    {
+                        uint8_t real_gain;
+
+                        if(lna_gain>45)
+                        {
+                            lna_gain = 1;
+                            real_gain = 48;
+                        }
+                        else if(lna_gain>39)
+                        {
+                            lna_gain = 2;
+                            real_gain = 42;
+                        }
+                        else if(lna_gain>30)
+                        {
+                            lna_gain = 3;
+                            real_gain = 36;
+                        }
+                        else if(lna_gain>18)
+                        {
+                            lna_gain = 4;
+                            real_gain = 24;
+                        }
+                        else if(lna_gain>6)
+                        {
+                            lna_gain = 5;
+                            real_gain = 12;
+                        }
+                        else
+                        {
+                            lna_gain = 6;
+                            real_gain = 0;
+                        }
+                        printf("Setting LNA gain to %d dB\n", real_gain);
+                    }
+                    else
+                    {
+                        printf("Invalid LNA gain. Using 48 dB.\n");
+                        lna_gain = 1;
+                    }
+                }
+                else
+                {
+                    printf("Invalid LNA gain. Using 48 dB.\n");
+                    lna_gain = 1;
+                }
+            break;
+
+            case 'p': //pga gain
+                if(strlen(optarg)>0)
+                {
+                    pga_gain = atoi(optarg);
+                    if(pga_gain<=30)
+                    {
+                        pga_gain = pga_gain / 2;
+                        printf("Setting PGA gain to %d dB\n", pga_gain*2);
+                    }
+                    else
+                    {
+                        printf("Invalid PGA gain. Using 30 dB.\n");
+                        pga_gain = 15;
+                    }
+                }
+                else
+                {
+                    printf("Invalid PGA gain. Using 30 dB.\n");
+                    pga_gain = 15;
                 }
             break;
 
@@ -514,7 +599,7 @@ int main(int argc, char *argv[])
 
     sx1255_writereg(0x0D, (0x01 << 5) | (0x05 << 2) | 0x03);
     sx1255_writereg(0x0E, 0x00);
-    sx1255_writereg(0x0C, (0x01 << 5) | (0x0F << 1) | 0x00);
+    sx1255_writereg(0x0C, (lna_gain << 5) | (pga_gain << 1) | 0x00);
 
     sx1255_writereg(0x0B, 5);
     sx1255_writereg(0x0A, (0 << 5) | 0);
