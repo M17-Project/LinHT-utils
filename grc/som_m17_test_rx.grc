@@ -45,6 +45,18 @@ blocks:
     coordinate: [200, 12.0]
     rotation: 0
     state: enabled
+- name: zmq_len
+  id: variable
+  parameters:
+    comment: ''
+    value: '2048'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [592, 12.0]
+    rotation: 0
+    state: enabled
 - name: analog_quadrature_demod_cf_0
   id: analog_quadrature_demod_cf
   parameters:
@@ -58,7 +70,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1048, 196.0]
+    coordinate: [1072, 196.0]
     rotation: 0
     state: enabled
 - name: aud_sink
@@ -181,6 +193,24 @@ blocks:
     coordinate: [1144, 348.0]
     rotation: 0
     state: true
+- name: blocks_stream_to_vector_0
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: zmq_len
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [728, 88.0]
+    rotation: 0
+    state: true
 - name: blocks_stream_to_vector_2
   id: blocks_stream_to_vector
   parameters:
@@ -300,7 +330,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [696, 148.0]
+    coordinate: [720, 148.0]
     rotation: 0
     state: enabled
 - name: m17_m17_decoder_0
@@ -343,7 +373,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [880, 172.0]
+    coordinate: [904, 172.0]
     rotation: 0
     state: enabled
 - name: rational_resampler_xxx_1
@@ -386,7 +416,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1216, 156.0]
+    coordinate: [1240, 156.0]
     rotation: 0
     state: enabled
 - name: virtual_sink_0
@@ -399,7 +429,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1424, 196.0]
+    coordinate: [1448, 196.0]
     rotation: 0
     state: enabled
 - name: virtual_source_0
@@ -431,15 +461,39 @@ blocks:
     coordinate: [952, 348.0]
     rotation: 0
     state: enabled
+- name: zeromq_pub_sink_0
+  id: zeromq_pub_sink
+  parameters:
+    address: tcp://*:17005
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    drop_on_hwm: 'True'
+    hwm: '-1'
+    key: ''
+    pass_tags: 'False'
+    timeout: '100'
+    type: complex
+    vlen: zmq_len
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [904, 44.0]
+    rotation: 0
+    state: true
 
 connections:
 - [analog_quadrature_demod_cf_0, '0', root_raised_cosine_filter_0, '0']
 - [audio_source_0, '0', blocks_float_to_complex_0, '0']
 - [audio_source_0, '1', blocks_float_to_complex_0, '1']
+- [blocks_correctiq_0, '0', blocks_stream_to_vector_0, '0']
 - [blocks_correctiq_0, '0', low_pass_filter_0, '0']
 - [blocks_float_to_complex_0, '0', fir_filter_xxx_0, '0']
 - [blocks_packed_to_unpacked_xx_0, '0', blocks_stream_to_vector_2, '0']
 - [blocks_short_to_float_0, '0', rational_resampler_xxx_1, '0']
+- [blocks_stream_to_vector_0, '0', zeromq_pub_sink_0, '0']
 - [blocks_stream_to_vector_2, '0', vocoder_codec2_decode_ps_0, '0']
 - [digital_symbol_sync_xx_0, '0', m17_m17_decoder_0, '0']
 - [fir_filter_xxx_0, '0', blocks_correctiq_0, '0']
