@@ -1,7 +1,8 @@
 /*
  * Simple key scan app with framebuffer access.
+ * Includes sample ISS pass skyplot.
  *
- * Compile with `gcc -Wall -Wextra -O2 fb.c -o fb`
+ * Compile with `make`
  */
 
 #include <stdio.h>
@@ -10,10 +11,16 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <fcntl.h>
+#include <math.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+
+#include <predict/predict.h>
+
+#define DEG2RAD(x) ((x) * M_PI / 180.0f)
+#define RAD2DEG(x) ((x) / M_PI * 180.0f)
 
 #define RES_X 160
 #define RES_Y 128
@@ -52,6 +59,14 @@ int kbd; // keyboard file handle
 
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
+
+char tle[2][128] =
+	{
+		"1 25544U 98067A   25246.19936559  .00014267  00000-0  25396-3 0  9994",
+		"2 25544  51.6337 280.4082 0003342 309.8573  50.2122 15.50393129527260"};
+
+const float lat = 52.43f;
+const float lon = 20.71f;
 
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
@@ -118,13 +133,40 @@ static inline void put_pixel(uint32_t *fb, int x, int y, uint32_t color)
 		fb[y * RES_X + x] = color;
 }
 
+void draw_line(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t color)
+{
+	int dx = abs(x1 - x0);
+	int dy = -abs(y1 - y0);
+	int sx = x0 < x1 ? 1 : -1;
+	int sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy; // error term
+
+	while (1)
+	{
+		put_pixel(fb, x0, y0, color);
+		if (x0 == x1 && y0 == y1)
+			break;
+		int e2 = 2 * err;
+		if (e2 >= dy)
+		{
+			err += dy;
+			x0 += sx;
+		}
+		if (e2 <= dx)
+		{
+			err += dx;
+			y0 += sy;
+		}
+	}
+}
+
 void draw_circle(uint32_t *fb, uint16_t cx, uint16_t cy, uint8_t r, uint32_t color, bool filled)
 {
-	float t1 = (float)r/16;
+	float t1 = (float)r / 16;
 	uint16_t x = r;
 	uint16_t y = 0;
 
-	while (x > y)
+	while (x >= y)
 	{
 		if (filled)
 		{
@@ -152,9 +194,9 @@ void draw_circle(uint32_t *fb, uint16_t cx, uint16_t cy, uint8_t r, uint32_t col
 		}
 
 		y++;
-    	t1 = t1 + y;
-    	float t2 = t1 - x;
-    	if (t2 >= 0)
+		t1 = t1 + y;
+		float t2 = t1 - x;
+		if (t2 >= 0)
 		{
 			t1 = t2;
 			x--;
@@ -174,6 +216,25 @@ int main(void)
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
 	{
 		return rval;
+	}
+
+	// sample ISS pass
+	struct predict_position orbit;
+	struct predict_observation observation;
+
+	predict_orbital_elements_t *orbital_elements = predict_parse_tle(tle[0], tle[1]);
+	predict_observer_t *observer = predict_create_observer("OpenRTX", DEG2RAD(lat), DEG2RAD(lon), 75);
+
+	float az_el[2][601] = {{0, 0}};
+	for (int t = -5 * 60; t < 5 * 60; t++)
+	{
+		predict_julian_date_t curr_time = predict_to_julian(1756948800 + t);
+
+		predict_orbit(orbital_elements, &orbit, curr_time);
+		predict_observe_orbit(observer, &orbit, &observation);
+
+		az_el[0][t + 300] = RAD2DEG(observation.azimuth);
+		az_el[1][t + 300] = RAD2DEG(observation.elevation);
 	}
 
 	struct input_event ev;
@@ -197,17 +258,36 @@ int main(void)
 					}
 				}
 
-				else if(ev.code == KEY_DOWN)
+				else if (ev.code == KEY_DOWN)
 				{
-					draw_circle(framebuffer, RES_X/2, RES_Y/2, RES_Y/2-1, 0x00FFFFFF, false);
+					draw_circle(framebuffer, RES_X / 2, RES_Y / 2, RES_Y / 2 - 1, 0x00FFFFFF, false);
+					draw_circle(framebuffer, RES_X / 2, RES_Y / 2, RES_Y / 4 - 1, 0x00FFFFFF, false);
+					draw_line(framebuffer, RES_X / 2, 1, RES_X / 2, RES_Y - 1, 0x00CCCCCC);
+					draw_line(framebuffer, RES_X / 2 - RES_Y / 2 + 1, RES_Y / 2, RES_X / 2 + RES_Y / 2 - 1, RES_Y / 2, 0x00CCCCCC);
 				}
 
-				if (ev.code == KEY_ESC)
+				else if (ev.code == KEY_ESC)
 				{
-					//black
+					// black
 					for (size_t i = 0; i < ssize / 4; i++)
 					{
 						framebuffer[i] = 0;
+					}
+				}
+
+				else if (ev.code == KEY_ENTER)
+				{
+					uint8_t x = RES_X / 2;
+					uint8_t y = RES_Y / 2;
+					uint8_t r = RES_Y / 2;
+
+					for (uint16_t i = 0; i < 601; i++)
+					{
+						float az = DEG2RAD(az_el[0][i] - 90);
+						float el = 90.0 - az_el[1][i];
+
+						if (az_el[1][i] >= 0.0f)
+							put_pixel(framebuffer, x + r * el / 90.0f * cos(az), y + r * el / 90.0f * sinf(az), 0x0000FF00);
 					}
 				}
 			}
