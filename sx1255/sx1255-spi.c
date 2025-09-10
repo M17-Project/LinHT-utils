@@ -606,6 +606,10 @@ int main(int argc, char *argv[])
                 printf("Missing LNA gain. Using 48 dB.\n");
                 lna_gain = 1;
             }
+            val = sx1255_readreg(0x0C);
+            val &= (uint8_t)~(0xE0);
+            val |= lna_gain<<5;
+            sx1255_writereg(0x0C, val);
             break;
 
         // pga gain
@@ -629,7 +633,10 @@ int main(int argc, char *argv[])
                 printf("Missing PGA gain. Using 30 dB.\n");
                 pga_gain = 15;
             }
-            sx1255_writereg(0x0C, (lna_gain << 5) | (pga_gain << 1) | 0x00);
+            val = sx1255_readreg(0x0C);
+            val &= (uint8_t)~(0x1E);
+            val |= pga_gain<<1;
+            sx1255_writereg(0x0C, val);
             break;
 
         // enable/disable TX front end
