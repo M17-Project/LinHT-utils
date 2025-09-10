@@ -317,7 +317,7 @@ void print_help(const char *program_name)
     printf("SX1255 config tool\n\n");
     printf("Usage: %s [OPTIONS]\n\n", program_name);
     printf("Optional options:\n");
-    printf("  -R, --reset               Reset device\n");
+    printf("  -E, --reset               Reset device\n");
     printf("  -s, --rate=RATE           Set sample rate in kHz (125, 250, 500)\n");
     printf("  -r, --rxf=FREQ            Receive frequency (Hz)\n");
     printf("  -t, --txf=FREQ            Transmit frequency (Hz)\n");
@@ -325,6 +325,8 @@ void print_help(const char *program_name)
     printf("  -m, --mix_gain=GAIN       TX mixer gain (-37.5..-7.5 dB)\n");
     printf("  -l, --lna_gain=GAIN       RX LNA gain (0..48 dB)\n");
     printf("  -p, --pga_gain=GAIN       RX PGA gain (0..30 dB)\n");
+    printf("  -T, --tx_ena=VAL          TX path enable (0/1)\n");
+    printf("  -R, --rx_ena=VAL          RX path enable (0/1)\n");
     printf("  -P, --pll_flags           Get PLL lock flags\n");
     printf("  -G, --get_reg=ADDR        Get register value (dec or hex address)\n");
     printf("  -S, --set_reg=ADDR,VAL    Set register value (hex address and value)\n");
@@ -372,7 +374,7 @@ int main(int argc, char *argv[])
     // Define the long options
     static struct option long_options[] =
         {
-            {"reset", no_argument, 0, 'R'},
+            {"reset", no_argument, 0, 'E'},
             {"rate", required_argument, 0, 's'},
             {"rxf", required_argument, 0, 'r'},
             {"txf", required_argument, 0, 't'},
@@ -380,6 +382,8 @@ int main(int argc, char *argv[])
             {"mix_gain", required_argument, 0, 'm'},
             {"lna_gain", required_argument, 0, 'l'},
             {"pga_gain", required_argument, 0, 'p'},
+            {"tx_ena", required_argument, 0, 'T'},
+            {"rx_ena", required_argument, 0, 'R'},
             {"pll_flags", no_argument, 0, 'P'},
             {"get_reg", required_argument, 0, 'G'},
             {"set_reg", required_argument, 0, 'S'},
@@ -405,7 +409,7 @@ int main(int argc, char *argv[])
         switch (opt)
         {
         // reset
-        case 'R':
+        case 'E':
             printf("Resetting device...\n");
             usleep(100000U);
             rst(1);
@@ -599,7 +603,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                printf("Invalid LNA gain. Using 48 dB.\n");
+                printf("Missing LNA gain. Using 48 dB.\n");
                 lna_gain = 1;
             }
             break;
@@ -626,6 +630,58 @@ int main(int argc, char *argv[])
                 pga_gain = 15;
             }
             sx1255_writereg(0x0C, (lna_gain << 5) | (pga_gain << 1) | 0x00);
+            break;
+
+        // enable/disable TX front end
+        case 'T':
+            if (strlen(optarg) > 0)
+            {
+                val = atoi(optarg);
+                if(val==0)
+                {
+                    val = sx1255_readreg(0x00);
+                    val &= (uint8_t)~((1<<2)|(1<<3));
+                    sx1255_writereg(0x00, val);
+                    printf("Disabling TX path.\n");
+                }
+                else
+                {
+                    val = sx1255_readreg(0x00);
+                    val |= (uint8_t)(1<<2)|(1<<3);
+                    sx1255_writereg(0x00, val);
+                    printf("Enabling TX path.\n");
+                }
+            }
+            else
+            {
+                printf("Missing TX enable parameter.\n");
+            }
+            break;
+
+        // enable/disable RX front end
+        case 'R':
+            if (strlen(optarg) > 0)
+            {
+                val = atoi(optarg);
+                if(val==0)
+                {
+                    val = sx1255_readreg(0x00);
+                    val &= (uint8_t)~(1<<1);
+                    sx1255_writereg(0x00, val);
+                    printf("Disabling RX path.\n");
+                }
+                else
+                {
+                    val = sx1255_readreg(0x00);
+                    val |= (uint8_t)(1<<1);
+                    sx1255_writereg(0x00, val);
+                    printf("Enabling RX path.\n");
+                }
+            }
+            else
+            {
+                printf("Missing RX enable parameter.\n");
+            }
             break;
 
         // get PLL lock flags
@@ -692,8 +748,6 @@ int main(int argc, char *argv[])
 
     sx1255_writereg(0x0B, 5);
     sx1255_writereg(0x0A, (0 << 5) | 0);
-
-    sx1255_writereg(0x00, (1 << 3) | (1 << 2) | (1 << 1) | 1);
 
     gpio_cleanup();
     return 0;
