@@ -37,59 +37,69 @@ typedef enum
     RATE_500K
 } rate_t;
 
-//default settings
-uint32_t rxf = 433.475e6;
-uint32_t txf = 438e6;
-float mix_gain = 14.0f;     //-9.5dB
-int8_t dac_gain = 2;        //-3dB
-uint8_t lna_gain = 1;       //48dB
-uint8_t pga_gain = 15;      //+30dB
-rate_t rate = RATE_125K;
+// settings
+uint32_t rxf;
+uint32_t txf;
+float mix_gain;
+int8_t dac_gain;
+uint8_t lna_gain;
+uint8_t pga_gain;
+rate_t rate;
+uint8_t addr;
+uint8_t val;
 
-int spi_init(char *dev) {
+int spi_init(char *dev)
+{
     int fd;
     int ret;
 
     fd = open(dev, O_RDWR);
-    if (fd < 0) {
+    if (fd < 0)
+    {
         perror("Can't open SPI device");
         return fd;
     }
 
     ret = ioctl(fd, SPI_IOC_WR_MODE, &mode);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI write mode");
         close(fd);
         return -1;
     }
     ret = ioctl(fd, SPI_IOC_RD_MODE, &mode);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI read mode");
         close(fd);
         return -1;
     }
 
     ret = ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI write bits per word");
         close(fd);
         return -1;
     }
     ret = ioctl(fd, SPI_IOC_RD_BITS_PER_WORD, &bits);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI read bits per word");
         close(fd);
         return -1;
     }
 
     ret = ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI write max speed");
         close(fd);
         return -1;
     }
     ret = ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed);
-    if (ret == -1) {
+    if (ret == -1)
+    {
         perror("Can't set SPI read max speed");
         close(fd);
         return -1;
@@ -99,9 +109,11 @@ int spi_init(char *dev) {
     return 0;
 }
 
-void sx1255_writereg(uint8_t addr, uint8_t val) {
+void sx1255_writereg(uint8_t addr, uint8_t val)
+{
     int fd = open(spi_device, O_RDWR);
-    if (fd < 0) {
+    if (fd < 0)
+    {
         perror("sx1255_writereg: open");
         return;
     }
@@ -116,9 +128,11 @@ void sx1255_writereg(uint8_t addr, uint8_t val) {
     usleep(10000U);
 }
 
-uint8_t sx1255_readreg(uint8_t addr) {
+uint8_t sx1255_readreg(uint8_t addr)
+{
     int fd = open(spi_device, O_RDWR);
-    if (fd < 0) {
+    if (fd < 0)
+    {
         perror("sx1255_readreg: open");
         return 0;
     }
@@ -135,74 +149,85 @@ uint8_t sx1255_readreg(uint8_t addr) {
     return rx[1];
 }
 
-uint8_t sx1255_set_rx_freq(uint32_t freq) {
-    if (freq <= 510e6 && freq >= 410e6) {
+uint8_t sx1255_set_rx_freq(uint32_t freq)
+{
+    if (freq <= 510e6 && freq >= 410e6)
+    {
         uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
         sx1255_writereg(0x01, (val >> 16) & 0xFF);
         sx1255_writereg(0x02, (val >> 8) & 0xFF);
         sx1255_writereg(0x03, val & 0xFF);
         return 0;
-    } else return 1;
+    }
+    else
+        return 1;
 }
 
-uint8_t sx1255_set_tx_freq(uint32_t freq) {
-    if (freq <= 510e6 && freq >= 410e6) {
+uint8_t sx1255_set_tx_freq(uint32_t freq)
+{
+    if (freq <= 510e6 && freq >= 410e6)
+    {
         uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
         sx1255_writereg(0x04, (val >> 16) & 0xFF);
         sx1255_writereg(0x05, (val >> 8) & 0xFF);
         sx1255_writereg(0x06, val & 0xFF);
         return 0;
-    } else return 1;
+    }
+    else
+        return 1;
 }
 
 int8_t sx1255_setrate(rate_t r)
 {
     uint8_t n, div;
 
-    switch(r)
+    switch (r)
     {
-        case RATE_125K:
-            n = 5;
-            div = 2;
+    case RATE_125K:
+        n = 5;
+        div = 2;
         break;
 
-        case RATE_250K:
-            n = 4;
-            div = 1;
+    case RATE_250K:
+        n = 4;
+        div = 1;
         break;
 
-        case RATE_500K:
-            n = 3;
-            div = 0;
+    case RATE_500K:
+        n = 3;
+        div = 0;
         break;
 
-        default: //125k
-            n = 5;
-            div = 2;
+    default: // 125k
+        n = 5;
+        div = 2;
         break;
     }
 
-    //interpolation/decimation factor = mant * 3^m * 2^n
-    sx1255_writereg(0x13, (0 << 7) | (0 << 6) | (n << 3) | (1 << 2)); 
-	
-	//mode B2, XTAL/CLK_OUT division factor=2^div
-    sx1255_writereg(0x12, (2<<4)|div);
+    // interpolation/decimation factor = mant * 3^m * 2^n
+    sx1255_writereg(0x13, (0 << 7) | (0 << 6) | (n << 3) | (1 << 2));
 
-    //return i2s status flag
-    return (sx1255_readreg(0x13)&(1<<1))>>1;
+    // mode B2, XTAL/CLK_OUT division factor=2^div
+    sx1255_writereg(0x12, (2 << 4) | div);
+
+    // return i2s status flag
+    return (sx1255_readreg(0x13) & (1 << 1)) >> 1;
 }
 
-int gpio_init(void) {
+int gpio_init(void)
+{
     // Open the GPIO chip
     chip_v2 = gpiod_chip_open(gpio_chip_path);
-    if (!chip_v2) {
+    if (!chip_v2)
+    {
         fprintf(stderr, "Error opening GPIO chip '%s': %s\n", gpio_chip_path, strerror(errno));
         return -1;
     }
 
     // Create line settings object to configure individual lines
     struct gpiod_line_settings *settings = gpiod_line_settings_new();
-    if (!settings) {
+    if (!settings)
+    {
         perror("Error creating line settings");
         gpiod_chip_close(chip_v2);
         return -1;
@@ -213,7 +238,8 @@ int gpio_init(void) {
 
     // Create a line config object to hold the settings for lines
     struct gpiod_line_config *line_cfg = gpiod_line_config_new();
-    if (!line_cfg) {
+    if (!line_cfg)
+    {
         perror("Error creating line config");
         gpiod_line_settings_free(settings);
         gpiod_chip_close(chip_v2);
@@ -221,7 +247,8 @@ int gpio_init(void) {
     }
     // Add the settings for our specific line (by offset) to the config
     unsigned int offsets[] = {RST_PIN_OFFSET};
-    if (gpiod_line_config_add_line_settings(line_cfg, offsets, 1, settings) != 0) {
+    if (gpiod_line_config_add_line_settings(line_cfg, offsets, 1, settings) != 0)
+    {
         fprintf(stderr, "Error adding line settings to config for pin %d: %s\n",
                 RST_PIN_OFFSET, strerror(errno));
         gpiod_line_config_free(line_cfg);
@@ -232,7 +259,8 @@ int gpio_init(void) {
 
     // Create a request config object for the overall request
     struct gpiod_request_config *req_cfg = gpiod_request_config_new();
-    if (!req_cfg) {
+    if (!req_cfg)
+    {
         perror("Error creating request config");
         gpiod_line_config_free(line_cfg);
         gpiod_line_settings_free(settings);
@@ -243,13 +271,14 @@ int gpio_init(void) {
 
     // Request the lines using the 3-argument function signature
     rst_line_request = gpiod_chip_request_lines(chip_v2, req_cfg, line_cfg);
-    
+
     // Free the config objects as they are no longer needed
     gpiod_request_config_free(req_cfg);
     gpiod_line_config_free(line_cfg);
     gpiod_line_settings_free(settings);
 
-    if (!rst_line_request) {
+    if (!rst_line_request)
+    {
         fprintf(stderr, "Error requesting GPIO lines for pin %d: %s\n",
                 RST_PIN_OFFSET, strerror(errno));
         gpiod_chip_close(chip_v2);
@@ -258,10 +287,12 @@ int gpio_init(void) {
     return 0;
 }
 
-int rst(uint8_t state) {
+int rst(uint8_t state)
+{
     // Set value using gpiod V2 API
     enum gpiod_line_value values[] = {state ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE};
-    if (gpiod_line_request_set_values(rst_line_request, values) < 0) {
+    if (gpiod_line_request_set_values(rst_line_request, values) < 0)
+    {
         fprintf(stderr, "Error setting GPIO line value for pin %d to state %d: %s\n",
                 RST_PIN_OFFSET, state, strerror(errno));
         return 1;
@@ -269,11 +300,14 @@ int rst(uint8_t state) {
     return 0;
 }
 
-void gpio_cleanup(void) {
-    if (rst_line_request) {
+void gpio_cleanup(void)
+{
+    if (rst_line_request)
+    {
         gpiod_line_request_release(rst_line_request);
     }
-    if (chip_v2) {
+    if (chip_v2)
+    {
         gpiod_chip_close(chip_v2);
     }
 }
@@ -283,15 +317,18 @@ void print_help(const char *program_name)
     printf("SX1255 config tool\n\n");
     printf("Usage: %s [OPTIONS]\n\n", program_name);
     printf("Optional options:\n");
-    printf("  -R, --reset           Reset device\n");
-    printf("  -s, --rate=RATE       Set sample rate in kHz (125, 250, 500)\n");
-    printf("  -r, --rxf=FREQ        Receive frequency (Hz)\n");
-    printf("  -t, --txf=FREQ        Transmit frequency (Hz)\n");
-    printf("  -d, --dac_gain=GAIN   DAC gain (dB)\n");
-    printf("  -m, --mix_gain=GAIN   Mixer gain (dB)\n");
-    printf("  -l, --lna_gain=GAIN   RX LNA gain (0..48dB)\n");
-    printf("  -p, --pga_gain=GAIN   RX PGA gain (0..30dB)\n");
-    printf("  -h, --help            Display this help message and exit\n");
+    printf("  -R, --reset               Reset device\n");
+    printf("  -s, --rate=RATE           Set sample rate in kHz (125, 250, 500)\n");
+    printf("  -r, --rxf=FREQ            Receive frequency (Hz)\n");
+    printf("  -t, --txf=FREQ            Transmit frequency (Hz)\n");
+    printf("  -d, --dac_gain=GAIN       TX DAC gain (-9, -6, -3, 0 dB)\n");
+    printf("  -m, --mix_gain=GAIN       TX mixer gain (-37.5..-7.5 dB)\n");
+    printf("  -l, --lna_gain=GAIN       RX LNA gain (0..48 dB)\n");
+    printf("  -p, --pga_gain=GAIN       RX PGA gain (0..30 dB)\n");
+    printf("  -P, --pll_flags           Get PLL lock flags\n");
+    printf("  -G, --get_reg=ADDR        Get register value (dec or hex address)\n");
+    printf("  -S, --set_reg=ADDR,VAL    Set register value (hex address and value)\n");
+    printf("  -h, --help                Display this help message and exit\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -s 500 -r 433475000 -t 438000000\n", program_name);
@@ -302,42 +339,60 @@ int main(int argc, char *argv[])
 {
     mode = SPI_MODE_0;
 
-    if(spi_init((char*)spi_device) == 0)
+    if (spi_init((char *)spi_device) == 0)
     {
-        //printf("SPI config OK\n");
+        // printf("SPI config OK\n");
     }
     else
     {
         return -1;
     }
 
-    if(gpio_init() != 0)
+    if (gpio_init() == 0)
+    {
+        ;
+    }
+    else
     {
         fprintf(stderr, "Can not initialize RST pin\nExiting\n");
         return -1;
     }
 
+    uint8_t val = sx1255_readreg(0x07);
+    printf("Detected SX1255 chip version V%d%c", (val >> 4) & 0xF, 'A' + (val & 0xF) - 1);
+    if (val == 0x11)
+    {
+        printf(" - OK\n");
+    }
+    else
+    {
+        printf(" - WARNING (expected V1A)\n");
+    }
+
     // Define the long options
     static struct option long_options[] =
-    {
-        {"reset",       no_argument,       0, 'R'},
-        {"rate",        required_argument, 0, 's'},
-        {"rxf",         required_argument, 0, 'r'},
-        {"txf",         required_argument, 0, 't'},
-        {"dac_gain",    required_argument, 0, 'd'},
-        {"mix_gain",    required_argument, 0, 'm'},
-        {"lna_gain",    required_argument, 0, 'l'},
-        {"pga_gain",    required_argument, 0, 'p'},
-        {"help",        no_argument,       0, 'h'},
-        {0, 0, 0, 0}
-    };
+        {
+            {"reset", no_argument, 0, 'R'},
+            {"rate", required_argument, 0, 's'},
+            {"rxf", required_argument, 0, 'r'},
+            {"txf", required_argument, 0, 't'},
+            {"dac_gain", required_argument, 0, 'd'},
+            {"mix_gain", required_argument, 0, 'm'},
+            {"lna_gain", required_argument, 0, 'l'},
+            {"pga_gain", required_argument, 0, 'p'},
+            {"pll_flags", no_argument, 0, 'P'},
+            {"get_reg", required_argument, 0, 'G'},
+            {"set_reg", required_argument, 0, 'S'},
+            {"help", no_argument, 0, 'h'},
+            {0, 0, 0, 0}
+        };
 
-    //autogenerate the arg list
+    // autogenerate the arg list
     char arglist[64] = {0};
-    for(uint8_t i=0; i<sizeof(long_options)/sizeof(struct option)-1; i++)
+    for (uint8_t i = 0; i < sizeof(long_options) / sizeof(struct option) - 1; i++)
     {
         arglist[strlen(arglist)] = long_options[i].val;
-        if(long_options[i].has_arg != no_argument)
+        if (long_options[i].has_arg != no_argument)
             arglist[strlen(arglist)] = ':';
     }
 
@@ -345,271 +400,300 @@ int main(int argc, char *argv[])
     int option_index = 0;
 
     // Parse command line arguments
-    while((opt = getopt_long(argc, argv, arglist, long_options, &option_index)) != -1) 
+    while ((opt = getopt_long(argc, argv, arglist, long_options, &option_index)) != -1)
     {
-        switch(opt) 
+        switch (opt)
         {
-            case 'R': // reset
-                printf("Resetting device...\n");
-                usleep(100000U);
-                rst(1);
-                usleep(100000U);
-                rst(0);
-                usleep(250000U);
-                printf("Device reset completed\n");
+        // reset
+        case 'R':
+            printf("Resetting device...\n");
+            usleep(100000U);
+            rst(1);
+            usleep(100000U);
+            rst(0);
+            usleep(250000U);
+            printf("Device reset completed\n");
+            break;
+
+        // sample rate
+        case 's':
+            if (strlen(optarg) > 0)
+            {
+                uint16_t srate = atoi(optarg);
+                if (srate == 125)
+                {
+                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    rate = RATE_125K;
+                }
+                else if (srate == 250)
+                {
+                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    rate = RATE_250K;
+                }
+                else if (srate == 500)
+                {
+                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    rate = RATE_500K;
+                }
+                else
+                {
+                    printf("Unsupported rate setting of %d kSa/s. Using 125 kSa/s\n", srate);
+                }
+            }
+            else
+            {
+                printf("Invalid sample rate. Using 125 kHz.\n");
+                rate = RATE_125K;
+            }
+
+            int8_t retval = sx1255_setrate(rate);
+            printf("I2S setup %s\n", retval == 0 ? "OK" : "error");
+            if (retval != 0)
+            {
+                printf("Exiting\n");
                 gpio_cleanup();
-                return 0;
+                return -1;
+            }
             break;
 
-            case 's': //sample rate
-                if(strlen(optarg)>0)
-                {
-                    uint16_t srate=atoi(optarg);
-                    if(srate==125)
-                    {
-                        printf("Setting sample rate to %d kSa/s\n", srate);
-                        rate = RATE_125K;
-                    }
-                    else if(srate==250)
-                    {
-                        printf("Setting sample rate to %d kSa/s\n", srate);
-                        rate = RATE_250K;
-                    }
-                    else if(srate==500)
-                    {
-                        printf("Setting sample rate to %d kSa/s\n", srate);
-                        rate = RATE_500K;
-                    }
-                    else
-                    {
-                        printf("Unsupported rate setting of %d kSa/s. Using 125 kSa/s\n", srate);
-                    }
-                }
-                else
-                {
-                    printf("Invalid sample rate.\nExiting.\n");
-                    gpio_cleanup();
-                    return 1;
-                }
+        // rx freq
+        case 'r':
+            if (strlen(optarg) > 0)
+            {
+                rxf = atoi(optarg);
+                printf("Setting RX frequency to %u Hz\n", rxf);
+            }
+            else
+            {
+                printf("Invalid RX frequency. Using 435000000 Hz.\n");
+                rxf = 435000000;
+            }
+            sx1255_set_rx_freq(rxf);
             break;
 
-            case 'r': //rx freq
-                if(strlen(optarg)>0)
-                {
-                    rxf=atoi(optarg);
-                    printf("Setting RX frequency to %u Hz\n", rxf);
-                }
-                else
-                {
-                    printf("Invalid RX frequency.\nExiting.\n");
-                    gpio_cleanup();
-                    return 1;
-                }
+        // tx freq
+        case 't':
+            if (strlen(optarg) > 0)
+            {
+                txf = atoi(optarg);
+                printf("Setting TX frequency to %u Hz\n", txf);
+            }
+            else
+            {
+                printf("Invalid TX frequency. Using 435000000 Hz.\n");
+                txf = 435000000;
+            }
+            sx1255_set_tx_freq(txf);
             break;
 
-            case 't': //tx freq
-                if(strlen(optarg)>0)
+        // dac gain
+        case 'd':
+            if (strlen(optarg) > 0)
+            {
+                dac_gain = atoi(optarg);
+                if (dac_gain == 0)
                 {
-                    txf=atoi(optarg);
-                    printf("Setting TX frequency to %u Hz\n", txf);
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 3;
                 }
-                else
+                else if (dac_gain == -3)
                 {
-                    printf("Invalid TX frequency.\nExiting.\n");
-                    gpio_cleanup();
-                    return 1;
-                }
-            break;
-
-            case 'd': //dac gain
-                if(strlen(optarg)>0)
-                {
-                    dac_gain = atoi(optarg);
-                    if(dac_gain==0)
-                    {
-                        printf("Setting DAC gain to %d dB\n", dac_gain);
-                        dac_gain = 3;
-                    }
-                    else if(dac_gain==-3)
-                    {
-                        printf("Setting DAC gain to %d dB\n", dac_gain);
-                        dac_gain = 2;
-                    }
-                    else if(dac_gain==-6)
-                    {
-                        printf("Setting DAC gain to %d dB\n", dac_gain);
-                        dac_gain = 1;
-                    }
-                    else if(dac_gain==-9)
-                    {
-                        printf("Setting DAC gain to %d dB\n", dac_gain);
-                        dac_gain = 0;
-                    }
-                    else
-                    {
-                        printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
-                        dac_gain = 2;
-                    }
-                }
-                else
-                {
-                    printf("Invalid DAC gain. Using -3 dB.\n");
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
                     dac_gain = 2;
                 }
-            break;
-            
-            case 'm': //mixer gain
-                if(strlen(optarg)>0)
+                else if (dac_gain == -6)
                 {
-                    mix_gain = atof(optarg);
-                    if(mix_gain>=-37.5 && mix_gain<=-7.5)
-                    {
-                        printf("Setting mixer gain to %.1f dB\n", mix_gain);
-                        mix_gain += 37.5f;
-                        mix_gain = roundf(mix_gain/2.0f);
-                    }
-                    else
-                    {
-                        printf("Invalid mixer gain. Using -9.5 dB.\n");
-                        mix_gain = 0x0E;
-                    }
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 1;
+                }
+                else if (dac_gain == -9)
+                {
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 0;
+                }
+                else
+                {
+                    printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
+                    dac_gain = 2;
+                }
+            }
+            else
+            {
+                printf("Missing DAC gain. Using -3 dB.\n");
+                dac_gain = 2;
+            }
+            sx1255_writereg(0x08, ((uint8_t)dac_gain << 4) | (uint8_t)mix_gain);
+            break;
+
+        // mixer gain
+        case 'm':
+            if (strlen(optarg) > 0)
+            {
+                mix_gain = atof(optarg);
+                if (mix_gain >= -37.5 && mix_gain <= -7.5)
+                {
+                    printf("Setting mixer gain to %.1f dB\n", mix_gain);
+                    mix_gain += 37.5f;
+                    mix_gain = roundf(mix_gain / 2.0f);
                 }
                 else
                 {
                     printf("Invalid mixer gain. Using -9.5 dB.\n");
                     mix_gain = 0x0E;
                 }
+            }
+            else
+            {
+                printf("Invalid mixer gain. Using -9.5 dB.\n");
+                mix_gain = 0x0E;
+            }
+            sx1255_writereg(0x08, ((uint8_t)dac_gain << 4) | (uint8_t)mix_gain);
             break;
 
-            case 'l': //lna gain
-                if(strlen(optarg)>0)
+        // lna gain
+        case 'l':
+            if (strlen(optarg) > 0)
+            {
+                lna_gain = atoi(optarg);
+                if (lna_gain <= 48)
                 {
-                    lna_gain = atoi(optarg);
-                    if(lna_gain<=48)
-                    {
-                        uint8_t real_gain;
+                    uint8_t real_gain;
 
-                        if(lna_gain>45)
-                        {
-                            lna_gain = 1;
-                            real_gain = 48;
-                        }
-                        else if(lna_gain>39)
-                        {
-                            lna_gain = 2;
-                            real_gain = 42;
-                        }
-                        else if(lna_gain>30)
-                        {
-                            lna_gain = 3;
-                            real_gain = 36;
-                        }
-                        else if(lna_gain>18)
-                        {
-                            lna_gain = 4;
-                            real_gain = 24;
-                        }
-                        else if(lna_gain>6)
-                        {
-                            lna_gain = 5;
-                            real_gain = 12;
-                        }
-                        else
-                        {
-                            lna_gain = 6;
-                            real_gain = 0;
-                        }
-                        printf("Setting LNA gain to %d dB\n", real_gain);
+                    if (lna_gain > 45)
+                    {
+                        lna_gain = 1;
+                        real_gain = 48;
+                    }
+                    else if (lna_gain > 39)
+                    {
+                        lna_gain = 2;
+                        real_gain = 42;
+                    }
+                    else if (lna_gain > 30)
+                    {
+                        lna_gain = 3;
+                        real_gain = 36;
+                    }
+                    else if (lna_gain > 18)
+                    {
+                        lna_gain = 4;
+                        real_gain = 24;
+                    }
+                    else if (lna_gain > 6)
+                    {
+                        lna_gain = 5;
+                        real_gain = 12;
                     }
                     else
                     {
-                        printf("Invalid LNA gain. Using 48 dB.\n");
-                        lna_gain = 1;
+                        lna_gain = 6;
+                        real_gain = 0;
                     }
+                    printf("Setting LNA gain to %d dB\n", real_gain);
                 }
                 else
                 {
                     printf("Invalid LNA gain. Using 48 dB.\n");
                     lna_gain = 1;
                 }
+            }
+            else
+            {
+                printf("Invalid LNA gain. Using 48 dB.\n");
+                lna_gain = 1;
+            }
             break;
 
-            case 'p': //pga gain
-                if(strlen(optarg)>0)
+        // pga gain
+        case 'p':
+            if (strlen(optarg) > 0)
+            {
+                pga_gain = atoi(optarg);
+                if (pga_gain <= 30)
                 {
-                    pga_gain = atoi(optarg);
-                    if(pga_gain<=30)
-                    {
-                        pga_gain = pga_gain / 2;
-                        printf("Setting PGA gain to %d dB\n", pga_gain*2);
-                    }
-                    else
-                    {
-                        printf("Invalid PGA gain. Using 30 dB.\n");
-                        pga_gain = 15;
-                    }
+                    pga_gain = pga_gain / 2;
+                    printf("Setting PGA gain to %d dB\n", pga_gain * 2);
                 }
                 else
                 {
-                    printf("Invalid PGA gain. Using 30 dB.\n");
+                    printf("PGA gain out of range. Using 30 dB.\n");
                     pga_gain = 15;
                 }
+            }
+            else
+            {
+                printf("Missing PGA gain. Using 30 dB.\n");
+                pga_gain = 15;
+            }
+            sx1255_writereg(0x0C, (lna_gain << 5) | (pga_gain << 1) | 0x00);
             break;
 
-            case 'h':
-                print_help(argv[0]);
-                gpio_cleanup();
-                return 0;
+        // get PLL lock flags
+        case 'P':
+            val = sx1255_readreg(0x11);
+            printf("TX PLL %s\n", (val & (1 << 0)) ? "locked" : "unlocked");
+            printf("RX PLL %s\n", (val & (1 << 1)) ? "locked" : "unlocked");
+            break;
+
+        // get register value
+        case 'G':
+            if (strlen(optarg) > 0)
+            {
+                if (strstr(optarg, "0x") != NULL)
+                    addr = strtol(optarg, NULL, 16);
+                else
+                    addr = atoi(optarg);
+
+                if (addr <= 0x13)
+                    printf("Register 0x%02X value: 0x%02X\n", addr, sx1255_readreg(addr));
+                else
+                    printf("Register readout error: address out of range.\n");
+            }
+            else
+            {
+                printf("Register readout error: missing register address.\n");
+            }
+            break;
+
+        // set register value (=hex,hex)
+        case 'S':
+            if (strlen(optarg) > 0)
+            {
+                addr = strtol(optarg, NULL, 16);
+	            val = strtol(strstr(optarg, ",")+1, NULL, 16);
+
+                if (addr <= 0x13)
+                {
+                    printf("Seting register 0x%02X to 0x%02X\n", addr, val);
+                    sx1255_writereg(addr, val);
+                }
+                else
+                    printf("Register write error: address out of range.\n");
+            }
+            else
+            {
+                printf("Register write error: missing params.\n");
+            }
+            break;
+
+        // help
+        case 'h':
+            print_help(argv[0]);
+            gpio_cleanup();
+            return 0;
             break;
         }
     }
 
-    //device reset
-    printf("Performing device reset...\n");
-    usleep(100000U);
-    rst(1);
-    usleep(100000U);
-    rst(0);
-    usleep(250000U);
-
-    uint8_t val = sx1255_readreg(0x07);
-    printf("SX1255 version 0x%02X", val);
-    if (val == 0x11) {
-        printf(" - OK\n");
-    } else {
-        printf(" - ERROR (expected 0x11)\n");
-        gpio_cleanup();
-        return -1;
-    }
-
-    //setting sample rate
-    int8_t retval = sx1255_setrate(rate);
-    printf("I2S setup %s\n", retval == 0 ? "OK" : "error");
-    if(retval!=0)
-    {
-        printf("Exiting\n");
-        gpio_cleanup();
-        return -1;
-    }
-    
-    sx1255_set_rx_freq(rxf);
-
-    //printf("Setting TX frequency to %u\n", txf);
-    sx1255_set_tx_freq(txf);
-
+    // we leave some registers for later
+    // TODO: add those to args above as well
     sx1255_writereg(0x0D, (0x01 << 5) | (0x05 << 2) | 0x03);
     sx1255_writereg(0x0E, 0x00);
-    sx1255_writereg(0x0C, (lna_gain << 5) | (pga_gain << 1) | 0x00);
 
     sx1255_writereg(0x0B, 5);
     sx1255_writereg(0x0A, (0 << 5) | 0);
-    sx1255_writereg(0x08, ((uint8_t)dac_gain << 4) | (uint8_t)mix_gain); //mixer and DAC gains
 
     sx1255_writereg(0x00, (1 << 3) | (1 << 2) | (1 << 1) | 1);
-
-    val = sx1255_readreg(0x11);
-    printf("TX PLL %s\n", (val & (1 << 0)) ? "locked" : "unlocked");
-    printf("RX PLL %s\n", (val & (1 << 1)) ? "locked" : "unlocked");
 
     gpio_cleanup();
     return 0;
