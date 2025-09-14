@@ -44,6 +44,7 @@ float mix_gain;
 int8_t dac_gain;
 uint8_t lna_gain;
 uint8_t pga_gain;
+uint16_t pll_bw;
 rate_t rate;
 uint8_t addr;
 uint8_t val;
@@ -321,10 +322,12 @@ void print_help(const char *program_name)
     printf("  -s, --rate=RATE           Set sample rate in kHz (125, 250, 500)\n");
     printf("  -r, --rxf=FREQ            Receive frequency (Hz)\n");
     printf("  -t, --txf=FREQ            Transmit frequency (Hz)\n");
-    printf("  -d, --dac_gain=GAIN       TX DAC gain (-9, -6, -3, 0 dB)\n");
-    printf("  -m, --mix_gain=GAIN       TX mixer gain (-37.5..-7.5 dB)\n");
     printf("  -l, --lna_gain=GAIN       RX LNA gain (0..48 dB)\n");
     printf("  -p, --pga_gain=GAIN       RX PGA gain (0..30 dB)\n");
+    printf("  -d, --dac_gain=GAIN       TX DAC gain (-9, -6, -3, 0 dB)\n");
+    printf("  -m, --mix_gain=GAIN       TX mixer gain (-37.5..-7.5 dB)\n");
+    printf("  -a  --rx_pll_bw=VAL       RX PLL bandwidth in kHz (75, 150, 225, 300)");
+    printf("  -b  --tx_pll_bw=VAL       TX PLL bandwidth in kHz (75, 150, 225, 300)");
     printf("  -T, --tx_ena=VAL          TX path enable (0/1)\n");
     printf("  -R, --rx_ena=VAL          RX path enable (0/1)\n");
     printf("  -P, --pll_flags           Get PLL lock flags\n");
@@ -373,23 +376,25 @@ int main(int argc, char *argv[])
 
     // Define the long options
     static struct option long_options[] =
-        {
-            {"reset", no_argument, 0, 'E'},
-            {"rate", required_argument, 0, 's'},
-            {"rxf", required_argument, 0, 'r'},
-            {"txf", required_argument, 0, 't'},
-            {"dac_gain", required_argument, 0, 'd'},
-            {"mix_gain", required_argument, 0, 'm'},
-            {"lna_gain", required_argument, 0, 'l'},
-            {"pga_gain", required_argument, 0, 'p'},
-            {"tx_ena", required_argument, 0, 'T'},
-            {"rx_ena", required_argument, 0, 'R'},
-            {"pll_flags", no_argument, 0, 'P'},
-            {"get_reg", required_argument, 0, 'G'},
-            {"set_reg", required_argument, 0, 'S'},
-            {"help", no_argument, 0, 'h'},
-            {0, 0, 0, 0}
-        };
+    {
+        {"reset", no_argument, 0, 'E'},
+        {"rate", required_argument, 0, 's'},
+        {"rxf", required_argument, 0, 'r'},
+        {"txf", required_argument, 0, 't'},
+        {"lna_gain", required_argument, 0, 'l'},
+        {"pga_gain", required_argument, 0, 'p'},
+        {"dac_gain", required_argument, 0, 'd'},
+        {"mix_gain", required_argument, 0, 'm'},
+        {"rx_pll_bw", required_argument, 0, 'a'},
+        {"tx_pll_bw", required_argument, 0, 'b'},
+        {"tx_ena", required_argument, 0, 'T'},
+        {"rx_ena", required_argument, 0, 'R'},
+        {"pll_flags", no_argument, 0, 'P'},
+        {"get_reg", required_argument, 0, 'G'},
+        {"set_reg", required_argument, 0, 'S'},
+        {"help", no_argument, 0, 'h'},
+        {0, 0, 0, 0}
+    };
 
     // autogenerate the arg list
     char arglist[64] = {0};
@@ -410,13 +415,15 @@ int main(int argc, char *argv[])
         {
         // reset
         case 'E':
-            printf("Resetting device...\n");
+            printf("Resetting device... ");
             usleep(100000U);
-            rst(1);
+            if(rst(1)!=0)
+                return -1;
             usleep(100000U);
-            rst(0);
+            if(rst(0)!=0)
+                return -1;
             usleep(250000U);
-            printf("Device reset completed\n");
+            printf("completed\n");
             break;
 
         // sample rate
@@ -489,71 +496,7 @@ int main(int argc, char *argv[])
             }
             sx1255_set_tx_freq(txf);
             break;
-
-        // dac gain
-        case 'd':
-            if (strlen(optarg) > 0)
-            {
-                dac_gain = atoi(optarg);
-                if (dac_gain == 0)
-                {
-                    printf("Setting DAC gain to %d dB\n", dac_gain);
-                    dac_gain = 3;
-                }
-                else if (dac_gain == -3)
-                {
-                    printf("Setting DAC gain to %d dB\n", dac_gain);
-                    dac_gain = 2;
-                }
-                else if (dac_gain == -6)
-                {
-                    printf("Setting DAC gain to %d dB\n", dac_gain);
-                    dac_gain = 1;
-                }
-                else if (dac_gain == -9)
-                {
-                    printf("Setting DAC gain to %d dB\n", dac_gain);
-                    dac_gain = 0;
-                }
-                else
-                {
-                    printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
-                    dac_gain = 2;
-                }
-            }
-            else
-            {
-                printf("Missing DAC gain. Using -3 dB.\n");
-                dac_gain = 2;
-            }
-            sx1255_writereg(0x08, ((uint8_t)dac_gain << 4) | (uint8_t)mix_gain);
-            break;
-
-        // mixer gain
-        case 'm':
-            if (strlen(optarg) > 0)
-            {
-                mix_gain = atof(optarg);
-                if (mix_gain >= -37.5 && mix_gain <= -7.5)
-                {
-                    printf("Setting mixer gain to %.1f dB\n", mix_gain);
-                    mix_gain += 37.5f;
-                    mix_gain = roundf(mix_gain / 2.0f);
-                }
-                else
-                {
-                    printf("Invalid mixer gain. Using -9.5 dB.\n");
-                    mix_gain = 0x0E;
-                }
-            }
-            else
-            {
-                printf("Invalid mixer gain. Using -9.5 dB.\n");
-                mix_gain = 0x0E;
-            }
-            sx1255_writereg(0x08, ((uint8_t)dac_gain << 4) | (uint8_t)mix_gain);
-            break;
-
+    
         // lna gain
         case 'l':
             if (strlen(optarg) > 0)
@@ -608,7 +551,7 @@ int main(int argc, char *argv[])
             }
             val = sx1255_readreg(0x0C);
             val &= (uint8_t)~(0xE0);
-            val |= lna_gain<<5;
+            val |= lna_gain << 5;
             sx1255_writereg(0x0C, val);
             break;
 
@@ -635,8 +578,134 @@ int main(int argc, char *argv[])
             }
             val = sx1255_readreg(0x0C);
             val &= (uint8_t)~(0x1E);
-            val |= pga_gain<<1;
+            val |= pga_gain << 1;
             sx1255_writereg(0x0C, val);
+            break;
+
+        // dac gain
+        case 'd':
+            if (strlen(optarg) > 0)
+            {
+                dac_gain = atoi(optarg);
+                if (dac_gain == 0)
+                {
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 3;
+                }
+                else if (dac_gain == -3)
+                {
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 2;
+                }
+                else if (dac_gain == -6)
+                {
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 1;
+                }
+                else if (dac_gain == -9)
+                {
+                    printf("Setting DAC gain to %d dB\n", dac_gain);
+                    dac_gain = 0;
+                }
+                else
+                {
+                    printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
+                    dac_gain = 2;
+                }
+            }
+            else
+            {
+                printf("Missing DAC gain. Using -3 dB.\n");
+                dac_gain = 2;
+            }
+            val = sx1255_readreg(0x08);
+            val &= (uint8_t)0x0F;
+            val |= (uint8_t)dac_gain << 4;
+            sx1255_writereg(0x08, val);
+            break;
+
+        // mixer gain
+        case 'm':
+            if (strlen(optarg) > 0)
+            {
+                mix_gain = atof(optarg);
+                if (mix_gain >= -37.5 && mix_gain <= -7.5)
+                {
+                    printf("Setting mixer gain to %.1f dB\n", mix_gain);
+                    mix_gain += 37.5f;
+                    mix_gain = roundf(mix_gain / 2.0f);
+                }
+                else
+                {
+                    printf("Invalid mixer gain. Using -9.5 dB.\n");
+                    mix_gain = 0x0E;
+                }
+            }
+            else
+            {
+                printf("Missing mixer gain. Using -9.5 dB.\n");
+                mix_gain = 0x0E;
+            }
+            val = sx1255_readreg(0x08);
+            val &= (uint8_t)0xF0;
+            val |= (uint8_t)mix_gain;
+            sx1255_writereg(0x08, val);
+            break;
+
+        // rx pll bw
+        case 'a':
+            if (strlen(optarg) > 0)
+            {
+                pll_bw = atof(optarg);
+                if (pll_bw >= 75 && pll_bw <= 300)
+                {
+                    pll_bw -= 75;
+                    pll_bw = pll_bw / 75;
+                    printf("Setting RX PLL bandwidth to %d kHz\n", (pll_bw+1)*75);
+                }
+                else
+                {
+                    printf("Invalid RX PLL bandwidth. Using 75 kHz.\n");
+                    pll_bw = 0;
+                }
+            }
+            else
+            {
+                printf("Missing RX PLL bandwidth. Using 75 kHz.\n");
+                pll_bw = 0;
+            }
+            val = sx1255_readreg(0x0E);
+            val &= (uint8_t)~(0x06);
+            val |= (uint8_t)pll_bw<<1;
+            sx1255_writereg(0x0E, val);
+            break;
+
+        // tx pll bw
+        case 'b':
+            if (strlen(optarg) > 0)
+            {
+                pll_bw = atof(optarg);
+                if (pll_bw >= 75 && pll_bw <= 300)
+                {
+                    pll_bw -= 75;
+                    pll_bw = pll_bw / 75;
+                    printf("Setting TX PLL bandwidth to %d kHz\n", (pll_bw+1)*75);
+                }
+                else
+                {
+                    printf("Invalid TX PLL bandwidth. Using 75 kHz.\n");
+                    pll_bw = 0;
+                }
+            }
+            else
+            {
+                printf("Missing TX PLL bandwidth. Using 75 kHz.\n");
+                pll_bw = 0;
+            }
+            val = sx1255_readreg(0x0A);
+            val &= (uint8_t)~(0x60);
+            val |= (uint8_t)pll_bw<<5;
+            sx1255_writereg(0x0A, val);
             break;
 
         // enable/disable TX front end
@@ -644,17 +713,17 @@ int main(int argc, char *argv[])
             if (strlen(optarg) > 0)
             {
                 val = atoi(optarg);
-                if(val==0)
+                if (val == 0)
                 {
                     val = sx1255_readreg(0x00);
-                    val &= (uint8_t)~((1<<2)|(1<<3));
+                    val &= (uint8_t)~((1 << 2) | (1 << 3));
                     sx1255_writereg(0x00, val);
                     printf("Disabling TX path.\n");
                 }
                 else
                 {
                     val = sx1255_readreg(0x00);
-                    val |= (uint8_t)(1<<2)|(1<<3);
+                    val |= (uint8_t)(1 << 2) | (1 << 3);
                     sx1255_writereg(0x00, val);
                     printf("Enabling TX path.\n");
                 }
@@ -670,17 +739,17 @@ int main(int argc, char *argv[])
             if (strlen(optarg) > 0)
             {
                 val = atoi(optarg);
-                if(val==0)
+                if (val == 0)
                 {
                     val = sx1255_readreg(0x00);
-                    val &= (uint8_t)~(1<<1);
+                    val &= (uint8_t)~(1 << 1);
                     sx1255_writereg(0x00, val);
                     printf("Disabling RX path.\n");
                 }
                 else
                 {
                     val = sx1255_readreg(0x00);
-                    val |= (uint8_t)(1<<1);
+                    val |= (uint8_t)(1 << 1);
                     sx1255_writereg(0x00, val);
                     printf("Enabling RX path.\n");
                 }
@@ -723,7 +792,7 @@ int main(int argc, char *argv[])
             if (strlen(optarg) > 0)
             {
                 addr = strtol(optarg, NULL, 16);
-	            val = strtol(strstr(optarg, ",")+1, NULL, 16);
+                val = strtol(strstr(optarg, ",") + 1, NULL, 16);
 
                 if (addr <= 0x13)
                 {
@@ -751,10 +820,7 @@ int main(int argc, char *argv[])
     // we leave some registers for later
     // TODO: add those to args above as well
     sx1255_writereg(0x0D, (0x01 << 5) | (0x05 << 2) | 0x03);
-    sx1255_writereg(0x0E, 0x00);
-
     sx1255_writereg(0x0B, 5);
-    sx1255_writereg(0x0A, (0 << 5) | 0);
 
     gpio_cleanup();
     return 0;
