@@ -326,8 +326,8 @@ void print_help(const char *program_name)
     printf("  -p, --pga_gain=GAIN       RX PGA gain (0..30 dB)\n");
     printf("  -d, --dac_gain=GAIN       TX DAC gain (-9, -6, -3, 0 dB)\n");
     printf("  -m, --mix_gain=GAIN       TX mixer gain (-37.5..-7.5 dB)\n");
-    printf("  -a  --rx_pll_bw=VAL       RX PLL bandwidth in kHz (75, 150, 225, 300)");
-    printf("  -b  --tx_pll_bw=VAL       TX PLL bandwidth in kHz (75, 150, 225, 300)");
+    printf("  -a  --rx_pll_bw=VAL       RX PLL bandwidth in kHz (75, 150, 225, 300)\n");
+    printf("  -b  --tx_pll_bw=VAL       TX PLL bandwidth in kHz (75, 150, 225, 300)\n");
     printf("  -T, --tx_ena=VAL          TX path enable (0/1)\n");
     printf("  -R, --rx_ena=VAL          RX path enable (0/1)\n");
     printf("  -P, --pll_flags           Get PLL lock flags\n");
