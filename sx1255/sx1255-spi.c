@@ -150,32 +150,20 @@ uint8_t sx1255_readreg(uint8_t addr)
     return rx[1];
 }
 
-uint8_t sx1255_set_rx_freq(uint32_t freq)
+void sx1255_set_rx_freq(uint32_t freq)
 {
-    if (freq <= 510e6 && freq >= 410e6)
-    {
-        uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
-        sx1255_writereg(0x01, (val >> 16) & 0xFF);
-        sx1255_writereg(0x02, (val >> 8) & 0xFF);
-        sx1255_writereg(0x03, val & 0xFF);
-        return 0;
-    }
-    else
-        return 1;
+    uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
+    sx1255_writereg(0x01, (val >> 16) & 0xFF);
+    sx1255_writereg(0x02, (val >> 8) & 0xFF);
+    sx1255_writereg(0x03, val & 0xFF);
 }
 
-uint8_t sx1255_set_tx_freq(uint32_t freq)
+void sx1255_set_tx_freq(uint32_t freq)
 {
-    if (freq <= 510e6 && freq >= 410e6)
-    {
-        uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
-        sx1255_writereg(0x04, (val >> 16) & 0xFF);
-        sx1255_writereg(0x05, (val >> 8) & 0xFF);
-        sx1255_writereg(0x06, val & 0xFF);
-        return 0;
-    }
-    else
-        return 1;
+    uint32_t val = lround((float)freq * 1048576.0f / CLK_FREQ);
+    sx1255_writereg(0x04, (val >> 16) & 0xFF);
+    sx1255_writereg(0x05, (val >> 8) & 0xFF);
+    sx1255_writereg(0x06, val & 0xFF);
 }
 
 int8_t sx1255_setrate(rate_t r)
