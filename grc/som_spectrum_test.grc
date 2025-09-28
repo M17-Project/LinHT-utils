@@ -1,0 +1,287 @@
+options:
+  parameters:
+    author: Wojciech SP5WWP
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: M17 Foundation 2025
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: no_gui
+    hier_block_src_path: '.:'
+    id: som_spectrum_test
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: run
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: Spectrum test
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 12.0]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: fft_size
+  id: variable
+  parameters:
+    comment: ''
+    value: 2**8
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [472, 76.0]
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: int(500e3)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [200, 12.0]
+    rotation: 0
+    state: enabled
+- name: zmq_len
+  id: variable
+  parameters:
+    comment: ''
+    value: '2048'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [472, 12.0]
+    rotation: 0
+    state: enabled
+- name: audio_source_0
+  id: audio_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    device_name: bsb_src
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_outputs: '2'
+    ok_to_block: 'True'
+    samp_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 184.0]
+    rotation: 0
+    state: true
+- name: blocks_correctiq_0
+  id: blocks_correctiq
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [552, 200.0]
+    rotation: 0
+    state: enabled
+- name: blocks_float_to_complex_0
+  id: blocks_float_to_complex
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [192, 184.0]
+    rotation: 0
+    state: true
+- name: blocks_stream_to_vector_0
+  id: blocks_stream_to_vector
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_items: zmq_len
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [728, 88.0]
+    rotation: 0
+    state: true
+- name: bsb_src
+  id: parameter
+  parameters:
+    alias: ''
+    comment: ''
+    hide: none
+    label: Baseband source device
+    short_id: b
+    type: str
+    value: hw:SX1255
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [296, 12.0]
+    rotation: 0
+    state: true
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "import numpy as np\nfrom gnuradio import gr\nimport os\n\nclass\
+      \ cyclic_file_sink(gr.sync_block):\n    \"\"\"\n    Overwrites the first `vec_len`\
+      \ floats of a file with each input vector.\n    Input vector length must match\
+      \ `vec_len`.\n    \"\"\"\n    def __init__(self, filename=\"out.bin\", vec_len=256):\n\
+      \        gr.sync_block.__init__(\n            self,\n            name=\"Cyclic\
+      \ File Sink\",\n            in_sig=[(np.float32, vec_len)],  # fixed vector\
+      \ of vec_len floats\n            out_sig=None\n        )\n        self.filename\
+      \ = filename\n        self.vec_len = vec_len\n\n        # Create or truncate\
+      \ file to vec_len floats\n        self.fh = open(self.filename, \"w+b\")\n \
+      \       self.fh.write(b\"\\x00\" * (self.vec_len * 4))\n        self.fh.flush()\n\
+      \n    def work(self, input_items, output_items):\n        in0 = input_items[0]\
+      \  # shape: (#vectors, vec_len)\n\n        for vec in in0:\n            self.fh.seek(0)\n\
+      \            self.fh.write(np.asarray(vec, dtype=np.float32).tobytes())\n  \
+      \          self.fh.flush()\n\n        return len(in0)\n\n    def stop(self):\n\
+      \        if self.fh:\n            self.fh.close()\n        return True\n"
+    affinity: ''
+    alias: ''
+    comment: ''
+    filename: '"/tmp/fft"'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vec_len: fft_size
+  states:
+    _io_cache: ('Cyclic File Sink', 'cyclic_file_sink', [('filename', "'out.bin'"),
+      ('vec_len', '256')], [('0', 'float', 256)], [], '\n    Overwrites the first
+      `vec_len` floats of a file with each input vector.\n    Input vector length
+      must match `vec_len`.\n    ', ['filename', 'vec_len'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [896, 188.0]
+    rotation: 0
+    state: enabled
+- name: fir_filter_xxx_0
+  id: fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_delay: '0'
+    taps: '[0.004562185464, -0.003315159603, 0.004494660764, -0.005933215824, 0.007662642297,
+      -0.009730151262, 0.012163462902, -0.015021624093, 0.018344736003, -0.022179571087,
+      0.026587935938, -0.031624350959, 0.037349001966, -0.043825719260, 0.051125585868,
+      -0.059326237377, 0.068504390315, -0.078746186598, 0.090147725138, -0.102813489566,
+      0.116858526852, -0.132408962019, 0.149609118181, -0.168623734209, 0.189641904748,
+      -0.212886091306, 0.238618491973, -0.267152027409, 0.298864858677, -0.334221364400,
+      0.373800820471, -0.418331953197, 0.468744199982, -0.526240588097, 0.592399581386,
+      -0.669319857641, 0.759823522591, -0.867734659884, 0.998215908414, -1.158013367129,
+      1.354923496534, -1.593658456679, 1.856602265650, -2.021519762741, 1.526746272983,
+      1.526746272983, -2.021519762741, 1.856602265650, -1.593658456679, 1.354923496534,
+      -1.158013367129, 0.998215908414, -0.867734659884, 0.759823522591, -0.669319857641,
+      0.592399581386, -0.526240588097, 0.468744199982, -0.418331953197, 0.373800820471,
+      -0.334221364400, 0.298864858677, -0.267152027409, 0.238618491973, -0.212886091306,
+      0.189641904748, -0.168623734209, 0.149609118181, -0.132408962019, 0.116858526852,
+      -0.102813489566, 0.090147725138, -0.078746186598, 0.068504390315, -0.059326237377,
+      0.051125585868, -0.043825719260, 0.037349001966, -0.031624350959, 0.026587935938,
+      -0.022179571087, 0.018344736003, -0.015021624093, 0.012163462902, -0.009730151262,
+      0.007662642297, -0.005933215824, 0.004494660764, -0.003315159603, 0.004562185464]'
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [352, 188.0]
+    rotation: 0
+    state: enabled
+- name: logpwrfft_x_0
+  id: logpwrfft_x
+  parameters:
+    affinity: ''
+    alias: ''
+    average: 'False'
+    avg_alpha: '1.0'
+    comment: ''
+    fft_size: fft_size
+    frame_rate: '10'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ref_scale: '1'
+    sample_rate: samp_rate
+    shift: 'True'
+    type: complex
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [736, 148.0]
+    rotation: 0
+    state: enabled
+- name: zeromq_pub_sink_0
+  id: zeromq_pub_sink
+  parameters:
+    address: tcp://*:17005
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    drop_on_hwm: 'True'
+    hwm: '-1'
+    key: ''
+    pass_tags: 'False'
+    timeout: '100'
+    type: complex
+    vlen: zmq_len
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [904, 44.0]
+    rotation: 0
+    state: true
+
+connections:
+- [audio_source_0, '0', blocks_float_to_complex_0, '0']
+- [audio_source_0, '1', blocks_float_to_complex_0, '1']
+- [blocks_correctiq_0, '0', blocks_stream_to_vector_0, '0']
+- [blocks_correctiq_0, '0', logpwrfft_x_0, '0']
+- [blocks_float_to_complex_0, '0', fir_filter_xxx_0, '0']
+- [blocks_stream_to_vector_0, '0', zeromq_pub_sink_0, '0']
+- [fir_filter_xxx_0, '0', blocks_correctiq_0, '0']
+- [logpwrfft_x_0, '0', epy_block_0, '0']
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
