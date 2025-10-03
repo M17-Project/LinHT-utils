@@ -204,6 +204,10 @@ int main(void)
 		ssize_t n = read(kbd, &ev, sizeof(ev));
 		if (n == (ssize_t)sizeof(ev))
 		{
+			if (ev.value == KEY_ESC) {
+				break;
+			}
+
 			if (ev.value == KEY_PRESS)
 			{
 				if (ev.code == KEY_UP)
