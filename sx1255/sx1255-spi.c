@@ -45,6 +45,7 @@ void print_help(const char *program_name)
     printf("  -T, --tx_ena=VAL          TX path enable (0/1)\n");
     printf("  -R, --rx_ena=VAL          RX path enable (0/1)\n");
     printf("  -P, --pll_flags           Get PLL lock flags\n");
+    printf("  -L, --rf_loop=VAL         Internal RF loopback enable (0/1)\n");
     printf("  -G, --get_reg=ADDR        Get register value (dec or hex address)\n");
     printf("  -S, --set_reg=ADDR,VAL    Set register value (hex address and value)\n");
     printf("  -h, --help                Display this help message and exit\n");
@@ -89,6 +90,7 @@ int main(int argc, char *argv[])
         {"tx_ena", required_argument, 0, 'T'},
         {"rx_ena", required_argument, 0, 'R'},
         {"pll_flags", no_argument, 0, 'P'},
+        {"rf_loop", required_argument, 0, 'L'},
         {"get_reg", required_argument, 0, 'G'},
         {"set_reg", required_argument, 0, 'S'},
         {"help", no_argument, 0, 'h'},
@@ -377,6 +379,28 @@ int main(int argc, char *argv[])
             val = sx1255_read_reg(0x11);
             printf("TX PLL %s\n", (val & (1 << 0)) ? "locked" : "unlocked");
             printf("RX PLL %s\n", (val & (1 << 1)) ? "locked" : "unlocked");
+            break;
+
+        // enable/disable internal RF loopback
+        case 'L':
+            if (strlen(optarg) > 0)
+            {
+                val = atoi(optarg);
+                if (val == 0)
+                {
+                    sx1255_enable_rf_loopback(false);
+                    printf("Disabling RF loopback.\n");
+                }
+                else
+                {
+                    sx1255_enable_rf_loopback(true);
+                    printf("Enabling RF loopback.\n");
+                }
+            }
+            else
+            {
+                printf("Missing RF loopback enable parameter.\n");
+            }
             break;
 
         // get register value
