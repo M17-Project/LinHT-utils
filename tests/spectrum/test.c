@@ -204,10 +204,6 @@ int main(void)
 		ssize_t n = read(kbd, &ev, sizeof(ev));
 		if (n == (ssize_t)sizeof(ev))
 		{
-			if (ev.value == KEY_ESC) {
-				break;
-			}
-
 			if (ev.value == KEY_PRESS)
 			{
 				if (ev.code == KEY_UP)
@@ -215,10 +211,14 @@ int main(void)
 					freq_a += 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if(ev.code == KEY_DOWN)
+				else if (ev.code == KEY_DOWN)
 				{
 					freq_a -= 12500;
 					sx1255_set_rx_freq(freq_a);
+				}
+				else if (ev.code == KEY_ESC)
+				{
+					break;
 				}
 				else
 				{
