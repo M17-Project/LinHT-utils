@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
     // main loop
     while (1)
     {
-        int16_t size = zmq_recv(zmq_sub, (uint8_t*)symb_buff, sizeof(symb_buff), ZMQ_DONTWAIT);
+        int16_t size = zmq_recv(zmq_sub, (uint8_t*)symb_buff, sizeof(symb_buff), 0);
         
         if (size == -1)
             continue;
