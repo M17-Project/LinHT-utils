@@ -80,7 +80,7 @@ int push_message(char *db_path, message_t msg)
     retval = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (retval != SQLITE_OK)
     {
-        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+        printf("Failed to prepare statement: %s\n", sqlite3_errmsg(db));
         sqlite3_close(db);
         return 1;
     }
@@ -112,6 +112,68 @@ int push_message(char *db_path, message_t msg)
     sqlite3_close(db);
 
     return 0;
+}
+
+int get_message_count(char *db_path)
+{
+	sqlite3 *db;
+    sqlite3_stmt *stmt;
+    int retval, count = 0;
+
+    retval = sqlite3_open(db_path, &db);
+    if (retval != SQLITE_OK)
+	{
+        printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages;", -1, &stmt, 0);
+    if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
+	{
+        count = sqlite3_column_int(stmt, 0);
+    }
+	else
+	{
+        printf("Query failed: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		sqlite3_close(db);
+		return -1;
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return count;
+}
+
+int get_unread_message_count(char *db_path)
+{
+	sqlite3 *db;
+    sqlite3_stmt *stmt;
+    int retval, count = 0;
+
+    retval = sqlite3_open(db_path, &db);
+    if (retval != SQLITE_OK)
+	{
+        printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages WHERE read = 0;", -1, &stmt, 0);
+    if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
+	{
+        count = sqlite3_column_int(stmt, 0);
+    }
+	else
+	{
+        printf("Query failed: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		sqlite3_close(db);
+		return -1;
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return count;
 }
 
 int main(int argc, char *argv[])
