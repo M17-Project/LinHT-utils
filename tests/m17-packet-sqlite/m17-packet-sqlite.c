@@ -13,7 +13,7 @@
 // libm17
 #include <m17.h>
 
-float sample;                           // last raw sample from ZMQ
+float symb_buff[2048];                  // raw samples from ZMQ
 float last[8];                          // look-back buffer for finding syncwords
 float dist;                             // Euclidean distance for finding syncwords in the symbol stream
 float pld[SYM_PER_PLD];                 // raw frame symbols
@@ -30,6 +30,7 @@ int8_t last_fn;                         // last received frame number (-1 when i
 uint8_t pushed;                         // counter for pushed symbols
 
 float det_thresh = 5.0f;
+char symb_path[128] = "/tmp/m17_symbols";
 char db_path[128] = "/var/lib/linht/messages.db";
 
 uint16_t last_id;
@@ -51,6 +52,7 @@ void print_help(const char *program_name)
     printf("Usage: %s [OPTIONS]\n\n", program_name);
     printf("Optional options:\n");
     printf("  -d, --dbase               Set the messages database file path\n");
+    printf("  -s, --ipc_symb            Set the IPC socket path for incoming M17 symbol stream\n");
     printf("  -t, --threshold           Set syncword detection threshold (non-negative, default=5.0)\n");
     printf("  -h, --help                Display this help message and exit\n");
     printf("\n");
@@ -114,12 +116,11 @@ int push_message(char *db_path, message_t msg)
 
 int main(int argc, char *argv[])
 {
-    linht_ctrl_green_led_set(false);
-
     // Define the long options
     static struct option long_options[] =
         {
             {"dbase", required_argument, 0, 'd'},
+            {"ipc_symb", required_argument, 0, 's'},
             {"threshold", required_argument, 0, 't'},
             {"help", no_argument, 0, 'h'},
             {0, 0, 0, 0}};
@@ -144,12 +145,24 @@ int main(int argc, char *argv[])
         case 'd':
             if (strlen(optarg) > 0)
             {
-                printf("Setting database path to %s\n", db_path);
+                printf("Setting database path to %s\n", optarg);
                 strcpy(db_path, optarg);
             }
             else
             {
                 printf("No database path given - using default (%s)\n", db_path);
+            }
+            break;
+
+        case 's':
+            if (strlen(optarg) > 0)
+            {
+                printf("Setting IPC symbol source path to %s\n", optarg);
+                strcpy(symb_path, optarg);
+            }
+            else
+            {
+                printf("No IPC symbol source path given - using default (%s)\n", symb_path);
             }
             break;
 
@@ -180,117 +193,147 @@ int main(int argc, char *argv[])
         }
     }
 
-    while (fread((uint8_t *)&sample, 4, 1, stdin) > 0)
+    // init
+    void *zmq_ctx = zmq_ctx_new();
+    void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
+    linht_ctrl_green_led_set(false);
+
+    char zmq_ipc[8+128];
+    sprintf(zmq_ipc, "ipc://%s", symb_path);
+    if(zmq_connect(zmq_sub, zmq_ipc) != 0)
     {
-        if (!syncd)
+        printf("ZeroMQ: Error connecting to IPC socket %s.\nExiting.\n", symb_path);
+        return 1;
+    }
+
+    zmq_setsockopt(zmq_sub, ZMQ_SUBSCRIBE, "", 0); // subscribe to everything
+    
+    // main loop
+    while (1)
+    {
+        int16_t size = zmq_recv(zmq_sub, (uint8_t*)symb_buff, sizeof(symb_buff), ZMQ_DONTWAIT);
+        
+        if (size == -1)
+            continue;
+        
+        for (uint16_t i=0; i<size/sizeof(float); i++)
         {
-            // push new symbol
-            for (uint8_t i = 0; i < 7; i++)
+            float sample = symb_buff[i];
+
+            if (!syncd)
             {
-                last[i] = last[i + 1];
-            }
+                // push new symbol
+                for (uint8_t i = 0; i < 7; i++)
+                {
+                    last[i] = last[i + 1];
+                }
 
-            last[7] = sample;
+                last[7] = sample;
 
-            // calculate euclidean norm
-            dist = eucl_norm(last, pkt_sync_symbols, 8);
+                // calculate euclidean norm
+                dist = eucl_norm(last, pkt_sync_symbols, 8);
 
-            if (dist < det_thresh) // frame syncword detected
-            {
-                syncd = 1;
-                pushed = 0;
-                fl = 0;
-            }
-            else
-            {
-                // calculate euclidean norm again, this time against LSF syncword
-                dist = eucl_norm(last, lsf_sync_symbols, 8);
-
-                if (dist < det_thresh) // LSF syncword
+                if (dist < det_thresh) // frame syncword detected
                 {
                     syncd = 1;
                     pushed = 0;
-                    last_fn = -1;
-                    memset(packet_data, 0, 33 * 25);
-                    fl = 1;
+                    fl = 0;
+                }
+                else
+                {
+                    // calculate euclidean norm again, this time against LSF syncword
+                    dist = eucl_norm(last, lsf_sync_symbols, 8);
+
+                    if (dist < det_thresh) // LSF syncword
+                    {
+                        syncd = 1;
+                        pushed = 0;
+                        last_fn = -1;
+                        memset(packet_data, 0, 33 * 25);
+                        fl = 1;
+                    }
                 }
             }
-        }
-        else
-        {
-            pld[pushed++] = sample;
-
-            if (pushed == SYM_PER_PLD) // frame acquired
+            else
             {
-                // if it is a frame
-                if (!fl)
+                pld[pushed++] = sample;
+
+                if (pushed == SYM_PER_PLD) // frame acquired
                 {
-                    // decode packet frame
-                    uint8_t rx_fn, rx_last;
-                    decode_pkt_frame(frame_data, &rx_last, &rx_fn, pld);
-
-                    // copy data - might require some fixing
-                    if (rx_fn <= 31 && rx_fn == last_fn + 1 && !rx_last)
+                    // if it is a frame
+                    if (!fl)
                     {
-                        memcpy(&packet_data[rx_fn * 25], frame_data, 25);
-                        last_fn++;
-                    }
-                    else if (rx_last)
-                    {
-                        memcpy(&packet_data[(last_fn + 1) * 25], frame_data, rx_fn < 25 ? rx_fn : 25); // prevent copying too much data (beyond frame_data end)
-                        uint16_t p_len = strlen((const char *)packet_data);
+                        // decode packet frame
+                        uint8_t rx_fn, rx_last;
+                        decode_pkt_frame(frame_data, &rx_last, &rx_fn, pld);
 
-                        if (CRC_M17(packet_data, p_len + 3) == 0)
+                        // copy data - might require some fixing
+                        if (rx_fn <= 31 && rx_fn == last_fn + 1 && !rx_last)
                         {
-                            // dump data
-                            if (packet_data[0] == 0x05) // if a text message
+                            memcpy(&packet_data[rx_fn * 25], frame_data, 25);
+                            last_fn++;
+                        }
+                        else if (rx_last)
+                        {
+                            memcpy(&packet_data[(last_fn + 1) * 25], frame_data, rx_fn < 25 ? rx_fn : 25); // prevent copying too much data (beyond frame_data end)
+                            uint16_t p_len = strlen((const char *)packet_data);
+
+                            if (CRC_M17(packet_data, p_len + 3) == 0)
                             {
-                                // CRC
-                                if (CRC_M17(packet_data, p_len + 3) == 0) // 3: terminating null plus a 2-byte CRC
+                                // dump data
+                                if (packet_data[0] == 0x05) // if a text message
                                 {
-                                    strcpy(msg.message, (char*)&packet_data[1]);
-                                    msg.timestamp = time(NULL);
-                                    msg.id = 0; // hard-coded for now
-                                    sprintf(msg.protocol, "M17");
-                                    msg.read = 0;
+                                    // CRC
+                                    if (CRC_M17(packet_data, p_len + 3) == 0) // 3: terminating null plus a 2-byte CRC
+                                    {
+                                        strcpy(msg.message, (char*)&packet_data[1]);
+                                        msg.timestamp = time(NULL);
+                                        msg.id = 0; // hard-coded for now
+                                        sprintf(msg.protocol, "M17");
+                                        msg.read = 0;
 
-                                    // dump to database
-                                    printf("Message from %s: %s\n", msg.src, msg.message);
-                                    push_message(db_path, msg);
+                                        // dump to database
+                                        printf("Message from %s: %s\n", msg.src, msg.message);
+                                        push_message(db_path, msg);
 
-                                    memset((uint8_t*)&msg, 0, sizeof(message_t));
+                                        memset((uint8_t*)&msg, 0, sizeof(message_t));
 
-                                    // blink
-                                    linht_ctrl_green_led_set(true);
-                                    usleep(100e3);
-                                    linht_ctrl_green_led_set(false);
+                                        // blink
+                                        linht_ctrl_green_led_set(true);
+                                        usleep(100e3);
+                                        linht_ctrl_green_led_set(false);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                else // if it is LSF
-                {
-                    // decode LSF
-                    decode_LSF(&lsf, pld);
-
-                    uint16_t crc = ((uint16_t)lsf.crc[0] << 8) | lsf.crc[1];
-
-                    if (LSF_CRC(&lsf) == crc)
+                    else // if it is LSF
                     {
-                        //LSF fields are available here
-                        decode_callsign_bytes((uint8_t*)msg.dst, lsf.dst);
-                        decode_callsign_bytes((uint8_t*)msg.src, lsf.src);
+                        // decode LSF
+                        decode_LSF(&lsf, pld);
+
+                        uint16_t crc = ((uint16_t)lsf.crc[0] << 8) | lsf.crc[1];
+
+                        if (LSF_CRC(&lsf) == crc)
+                        {
+                            //LSF fields are available here
+                            decode_callsign_bytes((uint8_t*)msg.dst, lsf.dst);
+                            decode_callsign_bytes((uint8_t*)msg.src, lsf.src);
+                        }
                     }
+
+                    // job done
+                    syncd = 0;
+                    pushed = 0;
+
+                    for (uint8_t i = 0; i < 8; i++)
+                        last[i] = 0.0;
                 }
-
-                // job done
-                syncd = 0;
-                pushed = 0;
-
-                for (uint8_t i = 0; i < 8; i++)
-                    last[i] = 0.0;
             }
         }
     }
+
+    // cleanup - TODO: move it elsewhere
+    zmq_close(zmq_sub);
+    zmq_ctx_term(zmq_ctx);
 }
