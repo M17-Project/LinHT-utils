@@ -10,42 +10,32 @@
 #include <sys/mman.h>
 #include <linux/fb.h>
 #include <time.h>
-
-//this is problematic
-//#include <linux/input.h>
-struct input_event
-{
-    struct timeval time;
-    __u16 type;
-    __u16 code;
-    __s32 value;
-};
-
 #include <raylib.h>
+#include <linux/input.h>
 #include <sx1255.h>
 
 #define RES_X 160
 #define RES_Y 128
 
 // keymap and states
-#define KEY_ESC 1
-#define KEY_1 2
-#define KEY_2 3
-#define KEY_3 4
-#define KEY_4 5
-#define KEY_5 6
-#define KEY_6 7
-#define KEY_7 8
-#define KEY_8 9
-#define KEY_9 10
-#define KEY_0 11
-#define KEY_ENTER 28
-#define KEY_HASH 43
-#define KEY_KPASTERISK 55
-#define KEY_F1 59
-#define KEY_F2 60
-#define KEY_UP 103
-#define KEY_DOWN 108
+#define LINHT_KEY_ESC 1
+#define LINHT_KEY_1 2
+#define LINHT_KEY_2 3
+#define LINHT_KEY_3 4
+#define LINHT_KEY_4 5
+#define LINHT_KEY_5 6
+#define LINHT_KEY_6 7
+#define LINHT_KEY_7 8
+#define LINHT_KEY_8 9
+#define LINHT_KEY_9 10
+#define LINHT_KEY_0 11
+#define LINHT_KEY_ENTER 28
+#define LINHT_KEY_HASH 43
+#define LINHT_KEY_KPASTERISK 55
+#define LINHT_KEY_F1 59
+#define LINHT_KEY_F2 60
+#define LINHT_KEY_UP 103
+#define LINHT_KEY_DOWN 108
 
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
@@ -202,15 +192,19 @@ int main(void)
 		{
 			if (ev.value == KEY_PRESS)
 			{
-				if (ev.code == KEY_UP)
+				if (ev.code == LINHT_KEY_UP)
 				{
 					freq_a += 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if(ev.code == KEY_DOWN)
+				else if (ev.code == LINHT_KEY_DOWN)
 				{
 					freq_a -= 12500;
 					sx1255_set_rx_freq(freq_a);
+				}
+				else if (ev.code == LINHT_KEY_ESC)
+				{
+					break;
 				}
 				else
 				{

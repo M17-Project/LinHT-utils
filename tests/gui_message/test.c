@@ -10,42 +10,32 @@
 #include <sys/mman.h>
 #include <linux/fb.h>
 #include <time.h>
-
-//this is problematic
-//#include <linux/input.h>
-struct input_event
-{
-    struct timeval time;
-    __u16 type;
-    __u16 code;
-    __s32 value;
-};
-
 #include <raylib.h>
+#include <linux/input.h>
 #include <sx1255.h>
 
 #define RES_X 160
 #define RES_Y 128
 
 // keymap and states
-#define KEY_ESC 1
-#define KEY_1 2
-#define KEY_2 3
-#define KEY_3 4
-#define KEY_4 5
-#define KEY_5 6
-#define KEY_6 7
-#define KEY_7 8
-#define KEY_8 9
-#define KEY_9 10
-#define KEY_0 11
-#define KEY_ENTER 28
-#define KEY_HASH 43
-#define KEY_KPASTERISK 55
-#define KEY_F1 59
-#define KEY_F2 60
-#define KEY_UP 103
-#define KEY_DOWN 108
+#define LINHT_KEY_ESC 1
+#define LINHT_KEY_1 2
+#define LINHT_KEY_2 3
+#define LINHT_KEY_3 4
+#define LINHT_KEY_4 5
+#define LINHT_KEY_5 6
+#define LINHT_KEY_6 7
+#define LINHT_KEY_7 8
+#define LINHT_KEY_8 9
+#define LINHT_KEY_9 10
+#define LINHT_KEY_0 11
+#define LINHT_KEY_ENTER 28
+#define LINHT_KEY_HASH 43
+#define LINHT_KEY_KPASTERISK 55
+#define LINHT_KEY_F1 59
+#define LINHT_KEY_F2 60
+#define LINHT_KEY_UP 103
+#define LINHT_KEY_DOWN 108
 
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
@@ -286,7 +276,7 @@ int main(void)
 	}
 
 	Image img;
-	Texture2D texture[6] = {0};
+	Texture2D texture[7] = {0};
 	
     // Initialize Raylib window with DRM backend (no X11)
     // When compiled with PLATFORM_DRM, this will automatically use the framebuffer
@@ -321,6 +311,10 @@ int main(void)
     ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
     texture[5] = LoadTextureFromImage(img);
 
+    img = LoadImage("/usr/share/linht/icons/envelope.png");
+    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    texture[6] = LoadTextureFromImage(img);
+
 	UnloadImage(img);
     
     // Set low FPS for embedded display
@@ -336,17 +330,17 @@ int main(void)
 		{
 			if (ev.value == KEY_PRESS)
 			{
-				if (ev.code == KEY_UP)
+				if (ev.code == LINHT_KEY_UP)
 				{
 					freq_a += 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if (ev.code == KEY_DOWN)
+				else if (ev.code == LINHT_KEY_DOWN)
 				{
 					freq_a -= 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if (ev.code == KEY_ESC)
+				else if (ev.code == LINHT_KEY_ESC)
 				{
 					break;
 				}
@@ -375,6 +369,9 @@ int main(void)
 			sprintf(time_s, "%02d:%02d", time_info->tm_hour, time_info->tm_min);
 			DrawTextEx(customFont, time_s, (Vector2){ 2.0f, 2.0f }, 14.0f, 0, WHITE);
 
+            //envelope icon
+            DrawTexture(texture[6], RES_X-61, 1, WHITE);
+
 			//'gnss' icon
 			DrawTexture(texture[2], RES_X-40, 1, WHITE);
 
@@ -390,12 +387,8 @@ int main(void)
     }
     
     // Cleanup
-	UnloadTexture(texture[0]);
-    UnloadTexture(texture[1]);
-	UnloadTexture(texture[2]);
-	UnloadTexture(texture[3]);
-	UnloadTexture(texture[4]);
-	UnloadTexture(texture[5]);
+    for(uint8_t i=0; i<sizeof(texture)/sizeof(texture[0]); i++)
+	    UnloadTexture(texture[i]);
 	UnloadFont(customFont);
 	UnloadFont(customFont10);
 	UnloadFont(customFont12);
