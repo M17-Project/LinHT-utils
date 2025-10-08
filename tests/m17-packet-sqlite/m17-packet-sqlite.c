@@ -41,6 +41,7 @@ typedef struct message
     char protocol[32];
     char src[64];
     char dst[64];
+    uint8_t meta[14];
     char message[1024];
     bool read;
 } message_t;
@@ -60,11 +61,50 @@ void print_help(const char *program_name)
     printf("  %s -t 2.0 -d /var/lib/linht/messages.db\n", program_name);
 }
 
+int db_init(char *db_path)
+{
+    sqlite3 *db;
+    char *err_msg = 0;
+    int retval;
+
+    retval = sqlite3_open(db_path, &db);
+    if (retval != SQLITE_OK)
+    {
+        printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        return 1;
+    }
+
+    const char *create_sql =
+        "CREATE TABLE IF NOT EXISTS messages ("
+        "id INTEGER PRIMARY KEY,"
+        "timestamp INTEGER,"
+        "protocol TEXT,"
+        "source TEXT,"
+        "destination TEXT,"
+        "meta BLOB,"
+        "message TEXT,"
+        "read INTEGER"
+        ");";
+
+    retval = sqlite3_exec(db, create_sql, 0, 0, &err_msg);
+
+    if (retval != SQLITE_OK)
+    {
+        printf("Failed to ensure table exists: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        sqlite3_close(db);
+        return 1;
+    }
+
+    sqlite3_close(db);
+    return 0;
+}
+
 int push_message(char *db_path, message_t msg)
 {
     sqlite3 *db;
     sqlite3_stmt *stmt;
-    int retval = 0;
+    int retval;
 
     retval = sqlite3_open(db_path, &db);
     if (retval != SQLITE_OK)
@@ -74,7 +114,7 @@ int push_message(char *db_path, message_t msg)
     }
 
     // prepare SQL with placeholders
-    const char *sql = "INSERT INTO messages (id, timestamp, protocol, source, destination, message, read) "
+    const char *sql = "INSERT INTO messages (timestamp, protocol, source, destination, meta, message, read) "
                       "VALUES (?, ?, ?, ?, ?, ?, ?);";
 
     retval = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
@@ -86,13 +126,13 @@ int push_message(char *db_path, message_t msg)
     }
 
     // bind values
-    sqlite3_bind_int(stmt, 1, msg.id);                              // id
-    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)msg.timestamp);      // timestamp (seconds since epoch)
-    sqlite3_bind_text(stmt, 3, msg.protocol, -1, SQLITE_STATIC);    // protocol
-    sqlite3_bind_text(stmt, 4, msg.src, -1, SQLITE_STATIC);         // source
-    sqlite3_bind_text(stmt, 5, msg.dst, -1, SQLITE_STATIC);         // destination
-    sqlite3_bind_text(stmt, 6, msg.message, -1, SQLITE_STATIC);     // message
-    sqlite3_bind_int(stmt, 7, 0);                                   // read flag (0 = unread)
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)msg.timestamp);              // timestamp (seconds since epoch)
+    sqlite3_bind_text(stmt, 2, msg.protocol, -1, SQLITE_STATIC);            // protocol
+    sqlite3_bind_text(stmt, 3, msg.src, -1, SQLITE_STATIC);                 // source
+    sqlite3_bind_text(stmt, 4, msg.dst, -1, SQLITE_STATIC);                 // destination
+    sqlite3_bind_blob(stmt, 5, msg.meta, sizeof(msg.meta), SQLITE_STATIC);  // meta
+    sqlite3_bind_text(stmt, 6, msg.message, -1, SQLITE_STATIC);             // message
+    sqlite3_bind_int(stmt, 7, 0);                                           // read flag (0 = unread)
 
     // execute
     retval = sqlite3_step(stmt);
@@ -256,9 +296,12 @@ int main(int argc, char *argv[])
     }
 
     // init
+    linht_ctrl_green_led_set(false);
+
+    db_init(db_path); // make sure an appropriate table in the DB exists
+
     void *zmq_ctx = zmq_ctx_new();
     void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
-    linht_ctrl_green_led_set(false);
 
     char zmq_ipc[8+128];
     sprintf(zmq_ipc, "ipc://%s", symb_path);
@@ -348,9 +391,9 @@ int main(int argc, char *argv[])
                                     // CRC
                                     if (CRC_M17(packet_data, p_len + 3) == 0) // 3: terminating null plus a 2-byte CRC
                                     {
+                                        memcpy((uint8_t*)msg.meta, (uint8_t*)lsf.meta, sizeof(lsf.meta));
                                         strcpy(msg.message, (char*)&packet_data[1]);
                                         msg.timestamp = time(NULL);
-                                        msg.id = 0; // hard-coded for now
                                         sprintf(msg.protocol, "M17");
                                         msg.read = 0;
 
