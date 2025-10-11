@@ -30,7 +30,7 @@ int8_t last_fn;                         // last received frame number (-1 when i
 uint8_t pushed;                         // counter for pushed symbols
 
 float det_thresh = 5.0f;
-char symb_path[128] = "/tmp/m17_symbols";
+char symb_path[128] = "/tmp/m17_symbols_rx";
 char db_path[128] = "/var/lib/linht/messages.db";
 
 uint16_t last_id;
