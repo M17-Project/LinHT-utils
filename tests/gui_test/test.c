@@ -16,6 +16,8 @@
 #include <arpa/inet.h>
 #include <sx1255.h>
 #include <liblinht-ctrl.h>
+#include <cyaml/cyaml.h>
+#include "settings.h"
 
 #define RES_X 160
 #define RES_Y 128
@@ -41,12 +43,112 @@ uint32_t *framebuffer; // framebuffer
 const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
 
-//ZeroMQ and PMT
+// ZeroMQ and PMT
 char *zmq_ipc = "ipc:///tmp/ptt_msg";
 
 uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
-uint8_t pmt_len;		// "SOT" and "EOT" PMTs are the same length - single variable is fine
+uint8_t pmt_len; // "SOT" and "EOT" PMTs are the same length - single variable is fine
+
+// settings
+cyaml_schema_field_t ui_fields[] =
+{
+	CYAML_FIELD_BOOL("backlight", CYAML_FLAG_DEFAULT, ui_t, backlight),
+	CYAML_FIELD_UINT("brightness", CYAML_FLAG_DEFAULT, ui_t, brightness),
+	CYAML_FIELD_UINT("timeout", CYAML_FLAG_DEFAULT, ui_t, timeout),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t rf_fields[] =
+{
+	CYAML_FIELD_FLOAT("freq_corr", CYAML_FLAG_DEFAULT, rf_settings_t, freq_corr),
+	CYAML_FIELD_BOOL("calibrated", CYAML_FLAG_DEFAULT, rf_settings_t, calibrated),
+	CYAML_FIELD_FLOAT("i_dc", CYAML_FLAG_DEFAULT, rf_settings_t, i_dc),
+	CYAML_FIELD_FLOAT("q_dc", CYAML_FLAG_DEFAULT, rf_settings_t, q_dc),
+	CYAML_FIELD_FLOAT("iq_bal", CYAML_FLAG_DEFAULT, rf_settings_t, iq_bal),
+	CYAML_FIELD_FLOAT("iq_crosstalk", CYAML_FLAG_DEFAULT, rf_settings_t, iq_crosstalk),
+	CYAML_FIELD_STRING_PTR("dpd_type", CYAML_FLAG_POINTER, rf_settings_t, dpd_type, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_FLOAT("dpd_0", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_0),
+	CYAML_FIELD_FLOAT("dpd_1", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_1),
+	CYAML_FIELD_FLOAT("dpd_2", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_2),
+	CYAML_FIELD_BOOL("bias_t", CYAML_FLAG_DEFAULT, rf_settings_t, bias_t),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t hw_settings_fields[] =
+{
+	CYAML_FIELD_FLOAT("timezone", CYAML_FLAG_DEFAULT, hw_settings_t, timezone),
+	CYAML_FIELD_MAPPING("keyboard", CYAML_FLAG_DEFAULT, hw_settings_t, keyboard, ui_fields),
+	CYAML_FIELD_MAPPING("display", CYAML_FLAG_DEFAULT, hw_settings_t, display, ui_fields),
+	CYAML_FIELD_MAPPING("rf", CYAML_FLAG_DEFAULT, hw_settings_t, rf, rf_fields),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t frontend_fields[] =
+{
+	CYAML_FIELD_FLOAT("rf_power_out_sp", CYAML_FLAG_DEFAULT, frontend_t, rf_power_out_sp),
+	CYAML_FIELD_UINT("rf_switch", CYAML_FLAG_DEFAULT, frontend_t, rf_switch),
+	CYAML_FIELD_FLOAT("atten_0", CYAML_FLAG_DEFAULT, frontend_t, atten_0),
+	CYAML_FIELD_FLOAT("atten_1", CYAML_FLAG_DEFAULT, frontend_t, atten_1),
+	CYAML_FIELD_FLOAT("lna_gain", CYAML_FLAG_DEFAULT, frontend_t, lna_gain),
+	CYAML_FIELD_FLOAT("pga_gain", CYAML_FLAG_DEFAULT, frontend_t, pga_gain),
+	CYAML_FIELD_FLOAT("dac_gain", CYAML_FLAG_DEFAULT, frontend_t, dac_gain),
+	CYAML_FIELD_FLOAT("mix_gain", CYAML_FLAG_DEFAULT, frontend_t, mix_gain),
+	CYAML_FIELD_BOOL("tx_enabled", CYAML_FLAG_DEFAULT, frontend_t, tx_enabled),
+	CYAML_FIELD_BOOL("rx_enabled", CYAML_FLAG_DEFAULT, frontend_t, rx_enabled),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t channel_extra_fields[] =
+{
+	CYAML_FIELD_STRING_PTR("mode", CYAML_FLAG_POINTER, channel_extra_t, mode, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_STRING_PTR("submode", CYAML_FLAG_POINTER, channel_extra_t, submode, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_FLOAT("squelch_level", CYAML_FLAG_DEFAULT, channel_extra_t, squelch_level),
+	CYAML_FIELD_FLOAT("ctcss_tone", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tone),
+	CYAML_FIELD_BOOL("ctcss_tx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tx),
+	CYAML_FIELD_BOOL("ctcss_rx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_rx),
+	CYAML_FIELD_STRING_PTR("src", CYAML_FLAG_POINTER, channel_extra_t, src, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_STRING_PTR("dst", CYAML_FLAG_POINTER, channel_extra_t, dst, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_UINT("can", CYAML_FLAG_DEFAULT, channel_extra_t, can),
+	CYAML_FIELD_BOOL("encrypted", CYAML_FLAG_DEFAULT, channel_extra_t, encrypted),
+	CYAML_FIELD_STRING_PTR("type", CYAML_FLAG_POINTER, channel_extra_t, type, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_STRING_PTR("encr_key", CYAML_FLAG_POINTER, channel_extra_t, encr_key, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_BOOL("signed", CYAML_FLAG_DEFAULT, channel_extra_t, signed_flag),
+	CYAML_FIELD_STRING_PTR("sign_key", CYAML_FLAG_POINTER, channel_extra_t, sign_key, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_STRING_PTR("meta", CYAML_FLAG_POINTER, channel_extra_t, meta, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t channel_fields[] =
+{
+	CYAML_FIELD_BOOL("active", CYAML_FLAG_DEFAULT, channel_t, active),
+	CYAML_FIELD_STRING_PTR("fg", CYAML_FLAG_POINTER, channel_t, fg, 0, CYAML_UNLIMITED),
+	CYAML_FIELD_UINT("tx_freq", CYAML_FLAG_DEFAULT, channel_t, tx_freq),
+	CYAML_FIELD_UINT("rx_freq", CYAML_FLAG_DEFAULT, channel_t, rx_freq),
+	CYAML_FIELD_FLOAT("bw", CYAML_FLAG_DEFAULT, channel_t, bw),
+	CYAML_FIELD_MAPPING("extra", CYAML_FLAG_DEFAULT, channel_t, extra, channel_extra_fields),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t channels_fields[] =
+{
+	CYAML_FIELD_MAPPING("vfo_0", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_0, channel_fields),
+	CYAML_FIELD_MAPPING("vfo_1", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_1, channel_fields),
+	CYAML_FIELD_END
+};
+
+cyaml_schema_field_t config_fields[] =
+{
+	CYAML_FIELD_MAPPING("frontend", CYAML_FLAG_DEFAULT, config_t, frontend, frontend_fields),
+	CYAML_FIELD_MAPPING("settings", CYAML_FLAG_DEFAULT, config_t, settings, hw_settings_fields),
+	CYAML_FIELD_MAPPING("channels", CYAML_FLAG_DEFAULT, config_t, channels, channels_fields),
+	CYAML_FIELD_END
+};
+
+static const cyaml_schema_value_t config_schema =
+{
+	CYAML_VALUE_MAPPING(CYAML_FLAG_POINTER, config_t, config_fields),
+};
 
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
@@ -109,11 +211,11 @@ void kbd_cleanup(int fhandle)
 
 uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 {
-    pmt[0] = 2;                                  // pmt type - zmq message
-    *((uint16_t *)&pmt[1]) = htons(strlen(msg)); // length
-    strcpy((char *)&pmt[3], msg);
+	pmt[0] = 2;									 // pmt type - zmq message
+	*((uint16_t *)&pmt[1]) = htons(strlen(msg)); // length
+	strcpy((char *)&pmt[3], msg);
 
-    return 3 + strlen(msg);
+	return 3 + strlen(msg);
 }
 
 int main(void)
@@ -121,9 +223,34 @@ int main(void)
 	// settings
 	uint32_t freq_a = 433475000, freq_b = 439212500;
 
+	cyaml_config_t cfg =
+	{
+        .log_level = CYAML_LOG_DEBUG,
+        .mem_fn = cyaml_mem,
+    };
+
+    config_t *conf = NULL;
+    cyaml_err_t err = cyaml_load_file("/usr/share/linht/settings.yaml", &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
+    if (err != CYAML_OK)
+	{
+        fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
+        return -1;
+    }
+
+	// printout
+	if(1)
+	{
+		fprintf(stderr, "Loaded settings:\n");
+		fprintf(stderr, "VCO A RX: %d Hz\n", conf->channels.vfo_0.rx_freq);
+		fprintf(stderr, "VCO A TX: %d Hz\n", conf->channels.vfo_0.tx_freq);
+		fprintf(stderr, "VCO B RX: %d Hz\n", conf->channels.vfo_1.rx_freq);
+		fprintf(stderr, "VCO B TX: %d Hz\n", conf->channels.vfo_1.tx_freq);
+		fprintf(stderr, "-------------------------\n\n");
+	}
+
 	// LEDs
 	linht_ctrl_green_led_set(false);
-    linht_ctrl_red_led_set(false);
+	linht_ctrl_red_led_set(false);
 
 	// SX1255
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
@@ -152,13 +279,13 @@ int main(void)
 
 	// ZeroMQ and PMT
 	void *zmq_ctx = zmq_ctx_new();
-    void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+	void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
 	if (zmq_connect(zmq_pub, zmq_ipc) != 0)
-    {
-        fprintf(stderr, "ZeroMQ: Error connecting to Unix socket %s.\nExiting.\n", zmq_ipc);
-        return -1;
-    }
+	{
+		fprintf(stderr, "ZeroMQ: Error connecting to Unix socket %s.\nExiting.\n", zmq_ipc);
+		return -1;
+	}
 
 	pmt_len = string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
@@ -216,11 +343,11 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: add a proper TX/RX RF switch control
+					// TODO: add a proper TX/RX RF switch control
 					system("tx_rx 1");
 					linht_ctrl_red_led_set(true);
-                    zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
-                    fprintf(stderr, "PTT pressed\n");
+					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
+					fprintf(stderr, "PTT pressed\n");
 				}
 				else if (ev.code == KEY_UP)
 				{
@@ -247,7 +374,7 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: add a proper TX/RX RF switch control
+					// TODO: add a proper TX/RX RF switch control
 					system("tx_rx 0");
 					linht_ctrl_red_led_set(false);
 					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
@@ -340,6 +467,7 @@ int main(void)
 	sx1255_cleanup();
 	zmq_disconnect(zmq_pub, zmq_ipc);
 	zmq_ctx_destroy(&zmq_ctx);
+	cyaml_free(&cfg, &config_schema, conf, 0);
 	CloseWindow();
 
 	return 0;
