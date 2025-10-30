@@ -141,7 +141,8 @@ int main(void)
 	sx1255_set_dac_gain(0);
 	sx1255_set_mixer_gain(-13.5);
 	sx1255_enable_rx(true);
-	sx1255_enable_tx(false);
+	sx1255_enable_tx(true);
+	system("tx_rx 0");
 
 	// keyboard
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
@@ -215,9 +216,8 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: add TX/RX RF switch control
-					sx1255_enable_rx(false);
-					sx1255_enable_tx(true);
+					//TODO: add a proper TX/RX RF switch control
+					system("tx_rx 1");
 					linht_ctrl_red_led_set(true);
                     zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
                     fprintf(stderr, "PTT pressed\n");
@@ -226,11 +226,13 @@ int main(void)
 				{
 					freq_a += 12500;
 					sx1255_set_rx_freq(freq_a);
+					sx1255_set_tx_freq(freq_a);
 				}
 				else if (ev.code == KEY_DOWN)
 				{
 					freq_a -= 12500;
 					sx1255_set_rx_freq(freq_a);
+					sx1255_set_tx_freq(freq_a);
 				}
 				else if (ev.code == KEY_ESC)
 				{
@@ -245,9 +247,8 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: add TX/RX RF switch control
-					sx1255_enable_rx(true);
-					sx1255_enable_tx(false);
+					//TODO: add a proper TX/RX RF switch control
+					system("tx_rx 0");
 					linht_ctrl_red_led_set(false);
 					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
 					fprintf(stderr, "PTT released\n");
@@ -294,8 +295,9 @@ int main(void)
 		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
+		DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "M17", (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
+		DrawTextEx(customFont12, "@ALL", (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
 		// DrawTexture(texture[1], 140, 28, WHITE); //'vfo a mute' icon
 
 		// horizontal separating bar
