@@ -38,6 +38,7 @@ const char *gpio_chip_path = "/dev/gpiochip0";
 int fb;				   // framebuffer file handle
 size_t ssize;		   // screen size
 uint32_t *framebuffer; // framebuffer
+uint16_t cnt;
 
 // keyboard
 const char *kbd_path = "/dev/input/event0";
@@ -52,102 +53,94 @@ uint8_t pmt_len; // "SOT" and "EOT" PMTs are the same length - single variable i
 
 // settings
 cyaml_schema_field_t ui_fields[] =
-{
-	CYAML_FIELD_BOOL("backlight", CYAML_FLAG_DEFAULT, ui_t, backlight),
-	CYAML_FIELD_UINT("brightness", CYAML_FLAG_DEFAULT, ui_t, brightness),
-	CYAML_FIELD_UINT("timeout", CYAML_FLAG_DEFAULT, ui_t, timeout),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_BOOL("backlight", CYAML_FLAG_DEFAULT, ui_t, backlight),
+		CYAML_FIELD_UINT("brightness", CYAML_FLAG_DEFAULT, ui_t, brightness),
+		CYAML_FIELD_UINT("timeout", CYAML_FLAG_DEFAULT, ui_t, timeout),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t rf_fields[] =
-{
-	CYAML_FIELD_FLOAT("freq_corr", CYAML_FLAG_DEFAULT, rf_settings_t, freq_corr),
-	CYAML_FIELD_BOOL("calibrated", CYAML_FLAG_DEFAULT, rf_settings_t, calibrated),
-	CYAML_FIELD_FLOAT("i_dc", CYAML_FLAG_DEFAULT, rf_settings_t, i_dc),
-	CYAML_FIELD_FLOAT("q_dc", CYAML_FLAG_DEFAULT, rf_settings_t, q_dc),
-	CYAML_FIELD_FLOAT("iq_bal", CYAML_FLAG_DEFAULT, rf_settings_t, iq_bal),
-	CYAML_FIELD_FLOAT("iq_crosstalk", CYAML_FLAG_DEFAULT, rf_settings_t, iq_crosstalk),
-	CYAML_FIELD_STRING_PTR("dpd_type", CYAML_FLAG_POINTER, rf_settings_t, dpd_type, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_FLOAT("dpd_0", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_0),
-	CYAML_FIELD_FLOAT("dpd_1", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_1),
-	CYAML_FIELD_FLOAT("dpd_2", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_2),
-	CYAML_FIELD_BOOL("bias_t", CYAML_FLAG_DEFAULT, rf_settings_t, bias_t),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_FLOAT("freq_corr", CYAML_FLAG_DEFAULT, rf_settings_t, freq_corr),
+		CYAML_FIELD_BOOL("calibrated", CYAML_FLAG_DEFAULT, rf_settings_t, calibrated),
+		CYAML_FIELD_FLOAT("i_dc", CYAML_FLAG_DEFAULT, rf_settings_t, i_dc),
+		CYAML_FIELD_FLOAT("q_dc", CYAML_FLAG_DEFAULT, rf_settings_t, q_dc),
+		CYAML_FIELD_FLOAT("iq_bal", CYAML_FLAG_DEFAULT, rf_settings_t, iq_bal),
+		CYAML_FIELD_FLOAT("iq_crosstalk", CYAML_FLAG_DEFAULT, rf_settings_t, iq_crosstalk),
+		CYAML_FIELD_STRING_PTR("dpd_type", CYAML_FLAG_POINTER, rf_settings_t, dpd_type, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_FLOAT("dpd_0", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_0),
+		CYAML_FIELD_FLOAT("dpd_1", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_1),
+		CYAML_FIELD_FLOAT("dpd_2", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_2),
+		CYAML_FIELD_BOOL("bias_t", CYAML_FLAG_DEFAULT, rf_settings_t, bias_t),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t hw_settings_fields[] =
-{
-	CYAML_FIELD_FLOAT("timezone", CYAML_FLAG_DEFAULT, hw_settings_t, timezone),
-	CYAML_FIELD_MAPPING("keyboard", CYAML_FLAG_DEFAULT, hw_settings_t, keyboard, ui_fields),
-	CYAML_FIELD_MAPPING("display", CYAML_FLAG_DEFAULT, hw_settings_t, display, ui_fields),
-	CYAML_FIELD_MAPPING("rf", CYAML_FLAG_DEFAULT, hw_settings_t, rf, rf_fields),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_FLOAT("timezone", CYAML_FLAG_DEFAULT, hw_settings_t, timezone),
+		CYAML_FIELD_MAPPING("keyboard", CYAML_FLAG_DEFAULT, hw_settings_t, keyboard, ui_fields),
+		CYAML_FIELD_MAPPING("display", CYAML_FLAG_DEFAULT, hw_settings_t, display, ui_fields),
+		CYAML_FIELD_MAPPING("rf", CYAML_FLAG_DEFAULT, hw_settings_t, rf, rf_fields),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t frontend_fields[] =
-{
-	CYAML_FIELD_FLOAT("rf_power_out_sp", CYAML_FLAG_DEFAULT, frontend_t, rf_power_out_sp),
-	CYAML_FIELD_UINT("rf_switch", CYAML_FLAG_DEFAULT, frontend_t, rf_switch),
-	CYAML_FIELD_FLOAT("atten_0", CYAML_FLAG_DEFAULT, frontend_t, atten_0),
-	CYAML_FIELD_FLOAT("atten_1", CYAML_FLAG_DEFAULT, frontend_t, atten_1),
-	CYAML_FIELD_FLOAT("lna_gain", CYAML_FLAG_DEFAULT, frontend_t, lna_gain),
-	CYAML_FIELD_FLOAT("pga_gain", CYAML_FLAG_DEFAULT, frontend_t, pga_gain),
-	CYAML_FIELD_FLOAT("dac_gain", CYAML_FLAG_DEFAULT, frontend_t, dac_gain),
-	CYAML_FIELD_FLOAT("mix_gain", CYAML_FLAG_DEFAULT, frontend_t, mix_gain),
-	CYAML_FIELD_BOOL("tx_enabled", CYAML_FLAG_DEFAULT, frontend_t, tx_enabled),
-	CYAML_FIELD_BOOL("rx_enabled", CYAML_FLAG_DEFAULT, frontend_t, rx_enabled),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_FLOAT("rf_power_out_sp", CYAML_FLAG_DEFAULT, frontend_t, rf_power_out_sp),
+		CYAML_FIELD_UINT("rf_switch", CYAML_FLAG_DEFAULT, frontend_t, rf_switch),
+		CYAML_FIELD_FLOAT("atten_0", CYAML_FLAG_DEFAULT, frontend_t, atten_0),
+		CYAML_FIELD_FLOAT("atten_1", CYAML_FLAG_DEFAULT, frontend_t, atten_1),
+		CYAML_FIELD_FLOAT("lna_gain", CYAML_FLAG_DEFAULT, frontend_t, lna_gain),
+		CYAML_FIELD_FLOAT("pga_gain", CYAML_FLAG_DEFAULT, frontend_t, pga_gain),
+		CYAML_FIELD_FLOAT("dac_gain", CYAML_FLAG_DEFAULT, frontend_t, dac_gain),
+		CYAML_FIELD_FLOAT("mix_gain", CYAML_FLAG_DEFAULT, frontend_t, mix_gain),
+		CYAML_FIELD_BOOL("tx_enabled", CYAML_FLAG_DEFAULT, frontend_t, tx_enabled),
+		CYAML_FIELD_BOOL("rx_enabled", CYAML_FLAG_DEFAULT, frontend_t, rx_enabled),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t channel_extra_fields[] =
-{
-	CYAML_FIELD_STRING_PTR("mode", CYAML_FLAG_POINTER, channel_extra_t, mode, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_STRING_PTR("submode", CYAML_FLAG_POINTER, channel_extra_t, submode, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_FLOAT("squelch_level", CYAML_FLAG_DEFAULT, channel_extra_t, squelch_level),
-	CYAML_FIELD_FLOAT("ctcss_tone", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tone),
-	CYAML_FIELD_BOOL("ctcss_tx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tx),
-	CYAML_FIELD_BOOL("ctcss_rx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_rx),
-	CYAML_FIELD_STRING_PTR("src", CYAML_FLAG_POINTER, channel_extra_t, src, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_STRING_PTR("dst", CYAML_FLAG_POINTER, channel_extra_t, dst, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_UINT("can", CYAML_FLAG_DEFAULT, channel_extra_t, can),
-	CYAML_FIELD_BOOL("encrypted", CYAML_FLAG_DEFAULT, channel_extra_t, encrypted),
-	CYAML_FIELD_STRING_PTR("type", CYAML_FLAG_POINTER, channel_extra_t, type, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_STRING_PTR("encr_key", CYAML_FLAG_POINTER, channel_extra_t, encr_key, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_BOOL("signed", CYAML_FLAG_DEFAULT, channel_extra_t, signed_flag),
-	CYAML_FIELD_STRING_PTR("sign_key", CYAML_FLAG_POINTER, channel_extra_t, sign_key, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_STRING_PTR("meta", CYAML_FLAG_POINTER, channel_extra_t, meta, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_STRING_PTR("mode", CYAML_FLAG_POINTER, channel_extra_t, mode, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_STRING_PTR("submode", CYAML_FLAG_POINTER, channel_extra_t, submode, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_FLOAT("squelch_level", CYAML_FLAG_DEFAULT, channel_extra_t, squelch_level),
+		CYAML_FIELD_FLOAT("ctcss_tone", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tone),
+		CYAML_FIELD_BOOL("ctcss_tx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_tx),
+		CYAML_FIELD_BOOL("ctcss_rx", CYAML_FLAG_DEFAULT, channel_extra_t, ctcss_rx),
+		CYAML_FIELD_STRING_PTR("src", CYAML_FLAG_POINTER, channel_extra_t, src, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_STRING_PTR("dst", CYAML_FLAG_POINTER, channel_extra_t, dst, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_UINT("can", CYAML_FLAG_DEFAULT, channel_extra_t, can),
+		CYAML_FIELD_BOOL("encrypted", CYAML_FLAG_DEFAULT, channel_extra_t, encrypted),
+		CYAML_FIELD_STRING_PTR("type", CYAML_FLAG_POINTER, channel_extra_t, type, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_STRING_PTR("encr_key", CYAML_FLAG_POINTER, channel_extra_t, encr_key, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_BOOL("signed", CYAML_FLAG_DEFAULT, channel_extra_t, signed_flag),
+		CYAML_FIELD_STRING_PTR("sign_key", CYAML_FLAG_POINTER, channel_extra_t, sign_key, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_STRING_PTR("meta", CYAML_FLAG_POINTER, channel_extra_t, meta, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t channel_fields[] =
-{
-	CYAML_FIELD_BOOL("active", CYAML_FLAG_DEFAULT, channel_t, active),
-	CYAML_FIELD_STRING_PTR("fg", CYAML_FLAG_POINTER, channel_t, fg, 0, CYAML_UNLIMITED),
-	CYAML_FIELD_UINT("tx_freq", CYAML_FLAG_DEFAULT, channel_t, tx_freq),
-	CYAML_FIELD_UINT("rx_freq", CYAML_FLAG_DEFAULT, channel_t, rx_freq),
-	CYAML_FIELD_FLOAT("bw", CYAML_FLAG_DEFAULT, channel_t, bw),
-	CYAML_FIELD_MAPPING("extra", CYAML_FLAG_DEFAULT, channel_t, extra, channel_extra_fields),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_BOOL("active", CYAML_FLAG_DEFAULT, channel_t, active),
+		CYAML_FIELD_STRING_PTR("fg", CYAML_FLAG_POINTER, channel_t, fg, 0, CYAML_UNLIMITED),
+		CYAML_FIELD_UINT("tx_freq", CYAML_FLAG_DEFAULT, channel_t, tx_freq),
+		CYAML_FIELD_UINT("rx_freq", CYAML_FLAG_DEFAULT, channel_t, rx_freq),
+		CYAML_FIELD_FLOAT("bw", CYAML_FLAG_DEFAULT, channel_t, bw),
+		CYAML_FIELD_MAPPING("extra", CYAML_FLAG_DEFAULT, channel_t, extra, channel_extra_fields),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t channels_fields[] =
-{
-	CYAML_FIELD_MAPPING("vfo_0", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_0, channel_fields),
-	CYAML_FIELD_MAPPING("vfo_1", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_1, channel_fields),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_MAPPING("vfo_0", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_0, channel_fields),
+		CYAML_FIELD_MAPPING("vfo_1", CYAML_FLAG_DEFAULT, typeof(((config_t *)0)->channels), vfo_1, channel_fields),
+		CYAML_FIELD_END};
 
 cyaml_schema_field_t config_fields[] =
-{
-	CYAML_FIELD_MAPPING("frontend", CYAML_FLAG_DEFAULT, config_t, frontend, frontend_fields),
-	CYAML_FIELD_MAPPING("settings", CYAML_FLAG_DEFAULT, config_t, settings, hw_settings_fields),
-	CYAML_FIELD_MAPPING("channels", CYAML_FLAG_DEFAULT, config_t, channels, channels_fields),
-	CYAML_FIELD_END
-};
+	{
+		CYAML_FIELD_MAPPING("frontend", CYAML_FLAG_DEFAULT, config_t, frontend, frontend_fields),
+		CYAML_FIELD_MAPPING("settings", CYAML_FLAG_DEFAULT, config_t, settings, hw_settings_fields),
+		CYAML_FIELD_MAPPING("channels", CYAML_FLAG_DEFAULT, config_t, channels, channels_fields),
+		CYAML_FIELD_END};
 
 static const cyaml_schema_value_t config_schema =
-{
-	CYAML_VALUE_MAPPING(CYAML_FLAG_POINTER, config_t, config_fields),
+	{
+		CYAML_VALUE_MAPPING(CYAML_FLAG_POINTER, config_t, config_fields),
 };
 
 // framebuffer init
@@ -220,31 +213,32 @@ uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 
 int main(void)
 {
-	// settings
+	// settings (clean this up)
 	uint32_t freq_a = 433475000, freq_b = 439212500;
 
 	cyaml_config_t cfg =
-	{
-        .log_level = CYAML_LOG_DEBUG,
-        .mem_fn = cyaml_mem,
-    };
+		{
+			.log_level = CYAML_LOG_DEBUG,
+			.mem_fn = cyaml_mem,
+		};
 
-    config_t *conf = NULL;
-    cyaml_err_t err = cyaml_load_file("/usr/share/linht/settings.yaml", &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
-    if (err != CYAML_OK)
+	config_t *conf = NULL;
+	cyaml_err_t err = cyaml_load_file("/usr/share/linht/settings.yaml", &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
+	if (err != CYAML_OK)
 	{
-        fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
-        return -1;
-    }
+		fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
+		return -1;
+	}
 
 	// printout
-	if(1)
+	if (1)
 	{
 		fprintf(stderr, "Loaded settings:\n");
 		fprintf(stderr, "VCO A RX: %d Hz\n", conf->channels.vfo_0.rx_freq);
 		fprintf(stderr, "VCO A TX: %d Hz\n", conf->channels.vfo_0.tx_freq);
 		fprintf(stderr, "VCO B RX: %d Hz\n", conf->channels.vfo_1.rx_freq);
 		fprintf(stderr, "VCO B TX: %d Hz\n", conf->channels.vfo_1.tx_freq);
+		fprintf(stderr, "Frequency correction: %.3f ppm\n", conf->settings.rf.freq_corr);
 		fprintf(stderr, "-------------------------\n\n");
 	}
 
@@ -261,8 +255,8 @@ int main(void)
 
 	sx1255_reset();
 	sx1255_set_rate(SX1255_RATE_500K);
-	sx1255_set_rx_freq(freq_a);
-	sx1255_set_tx_freq(freq_a);
+	sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+	sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
 	sx1255_set_lna_gain(20);
 	sx1255_set_pga_gain(24);
 	sx1255_set_dac_gain(0);
@@ -388,7 +382,8 @@ int main(void)
 		}
 
 		BeginDrawing();
-		// Clear screen
+
+		// clear screen
 		ClearBackground(BLACK);
 
 		// draw the wallpaper
@@ -408,8 +403,43 @@ int main(void)
 		//'gnss' icon
 		DrawTexture(texture[2], RES_X - 40, 1, WHITE);
 
-		// battery
-		DrawTexture(texture[3], RES_X - 24, 2, WHITE);
+		// battery voltage display
+		static char bv[8] = {0};
+		static Color bv_col = WHITE;
+		if (cnt % 5 == 0)
+		{
+			FILE *fp = fopen("/sys/bus/iio/devices/iio:device0/in_voltage1_raw", "r");
+
+			if (!fp)
+			{
+				fprintf(stderr, "Failed to open IIO sysfs entry\n");
+				return -1;
+			}
+
+			int value;
+			if (fscanf(fp, "%d", &value) != 1)
+			{
+				fprintf(stderr, "Failed to read battery voltage\n");
+				fclose(fp);
+				return -1;
+			}
+
+			fclose(fp);
+
+			uint16_t batt_mv = (uint16_t)(value / 4096.0 * 1.8 * (39.0 + 10.0) / 10.0 * 1000.0);
+			sprintf(bv, "%d.%d", batt_mv / 1000, (batt_mv - (batt_mv / 1000) * 1000) / 100);
+
+			if (batt_mv >= 7400)
+				bv_col = WHITE;
+			else if (batt_mv >= 7000)
+				bv_col = ORANGE;
+			else
+				bv_col = RED;
+		}
+
+		// icon or text
+		// DrawTexture(texture[3], RES_X - 24, 2, WHITE);
+		DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
 
 		// VFO A
 		DrawTexture(texture[4], 2, 23, WHITE);
@@ -451,6 +481,10 @@ int main(void)
 		// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
 
 		EndDrawing();
+
+		// frame counter
+		cnt++;
+		cnt %= 60 * 5;
 	}
 
 	// Cleanup
