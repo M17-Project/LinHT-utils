@@ -51,6 +51,9 @@ uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
 uint8_t pmt_len; // "SOT" and "EOT" PMTs are the same length - single variable is fine
 
+// states
+bool vfo_a_tx = false;
+
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
 {
@@ -249,6 +252,7 @@ int main(void)
 					system("tx_rx 1");
 					linht_ctrl_red_led_set(true);
 					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
+					vfo_a_tx = true;
 					fprintf(stderr, "PTT pressed\n");
 				}
 				else if (ev.code == KEY_UP)
@@ -280,6 +284,7 @@ int main(void)
 					system("tx_rx 0");
 					linht_ctrl_red_led_set(false);
 					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
+					vfo_a_tx = false;
 					fprintf(stderr, "PTT released\n");
 				}
 				else
@@ -355,9 +360,9 @@ int main(void)
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 		char freq_a_str[10];
 		sprintf(freq_a_str, "%d.%03d", freq_a / 1000000, (freq_a - (freq_a / 1000000) * 1000000) / 1000);
-		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, WHITE);
+		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx?RED:WHITE);
 		sprintf(freq_a_str, "%02d", (freq_a % 1000) / 10);
-		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, WHITE);
+		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx?RED:WHITE);
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
