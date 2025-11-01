@@ -105,6 +105,8 @@ int kbd_init(int *fhandle, const char *path)
 		return 1;
 	}
 
+	fcntl(*fhandle, F_SETFL, fcntl(*fhandle, F_GETFL, 0) | O_NONBLOCK); // non-blocking access
+
 	return 0;
 }
 
@@ -120,6 +122,22 @@ uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 	strcpy((char *)&pmt[3], msg);
 
 	return 3 + strlen(msg);
+}
+
+void sx1255_pa_enable(bool ena)
+{
+	if (ena)
+	{
+		uint8_t tmp = sx1255_read_reg(0x00);
+		tmp |= (1 << 3);
+		sx1255_write_reg(0x00, tmp);
+	}
+	else
+	{
+		uint8_t tmp = sx1255_read_reg(0x00);
+		tmp &= (uint8_t)~(1 << 3);
+		sx1255_write_reg(0x00, tmp);
+	}
 }
 
 int main(void)
@@ -141,7 +159,7 @@ int main(void)
 		return -1;
 	}
 
-	// printout
+	// settings printout
 	if (1)
 	{
 		fprintf(stderr, "Loaded settings:\n");
@@ -150,6 +168,8 @@ int main(void)
 		fprintf(stderr, "VCO B RX: %d Hz\n", conf->channels.vfo_1.rx_freq);
 		fprintf(stderr, "VCO B TX: %d Hz\n", conf->channels.vfo_1.tx_freq);
 		fprintf(stderr, "Frequency correction: %.3f ppm\n", conf->settings.rf.freq_corr);
+		fprintf(stderr, "In-phase DC offset: %.3f\n", conf->settings.rf.i_dc);
+		fprintf(stderr, "Quadrature DC offset: %.3f\n", conf->settings.rf.q_dc);
 		fprintf(stderr, "-------------------------\n\n");
 	}
 
@@ -174,6 +194,7 @@ int main(void)
 	sx1255_set_mixer_gain(-13.5);
 	sx1255_enable_rx(true);
 	sx1255_enable_tx(true);
+	sx1255_pa_enable(false);
 	system("tx_rx 0");
 
 	// keyboard
@@ -195,16 +216,16 @@ int main(void)
 	pmt_len = string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
 
-	Image img;
-	Texture2D texture[6] = {0};
-
-	// Initialize Raylib window with DRM backend (no X11)
-	// When compiled with PLATFORM_DRM, this will automatically use the framebuffer
-	InitWindow(RES_X, RES_Y, "Mockup");
+	// init Raylib
+	InitWindow(RES_X, RES_Y, "GUI test");
 
 	Font customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
 	Font customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
 	Font customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
+
+	// load images
+	Image img;
+	Texture2D texture[6] = {0};
 
 	// load the wallpaper
 	img = LoadImage("/usr/share/linht/icons/wallpaper.png");
@@ -233,23 +254,36 @@ int main(void)
 
 	UnloadImage(img);
 
-	// Set low FPS for embedded display
+	// set low FPS for embedded display
 	SetTargetFPS(5);
 
-	// Main loop
+	//execute FG
+	fprintf(stderr, "Executing GNU Radio flowgraph\n");
+	char fg_str[256] = {0};
+	sprintf(fg_str, "python /usr/share/linht/grc/som_m17_ptt.py -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
+		conf->settings.rf.i_dc,
+		conf->settings.rf.q_dc,
+		conf->channels.vfo_0.extra.src,
+		conf->channels.vfo_0.extra.dst,
+		conf->channels.vfo_0.extra.can );
+	system(fg_str);
+
+	// main loop
 	while (!WindowShouldClose())
 	{
 		struct input_event ev;
-		fcntl(kbd, F_SETFL, fcntl(kbd, F_GETFL, 0) | O_NONBLOCK); // non-blocking access
-		ssize_t n = read(kbd, &ev, sizeof(ev));
+
+		ssize_t n = read(kbd, &ev, sizeof(ev)); // non-blocking
+
 		if (n == (ssize_t)sizeof(ev))
 		{
 			if (ev.value == KEY_PRESS)
 			{
 				if (ev.code == KEY_P)
 				{
-					// TODO: add a proper TX/RX RF switch control
-					system("tx_rx 1");
+					sx1255_enable_rx(false);
+					sx1255_pa_enable(true);
+					system("tx_rx 1"); // TODO: add a proper TX/RX RF switch control
 					linht_ctrl_red_led_set(true);
 					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
 					vfo_a_tx = true;
@@ -258,14 +292,22 @@ int main(void)
 				else if (ev.code == KEY_UP)
 				{
 					freq_a += 12500;
-					sx1255_set_rx_freq(freq_a);
-					sx1255_set_tx_freq(freq_a);
+					sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+					sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
 				}
 				else if (ev.code == KEY_DOWN)
 				{
 					freq_a -= 12500;
-					sx1255_set_rx_freq(freq_a);
-					sx1255_set_tx_freq(freq_a);
+					sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+					sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+				}
+				else if (ev.code == KEY_LEFT)
+				{
+					;
+				}
+				else if (ev.code == KEY_RIGHT)
+				{
+					;
 				}
 				else if (ev.code == KEY_ESC)
 				{
@@ -280,8 +322,9 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					// TODO: add a proper TX/RX RF switch control
-					system("tx_rx 0");
+					sx1255_enable_rx(true);
+					sx1255_pa_enable(false);
+					system("tx_rx 0"); // TODO: add a proper TX/RX RF switch control
 					linht_ctrl_red_led_set(false);
 					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
 					vfo_a_tx = false;
@@ -360,9 +403,9 @@ int main(void)
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 		char freq_a_str[10];
 		sprintf(freq_a_str, "%d.%03d", freq_a / 1000000, (freq_a - (freq_a / 1000000) * 1000000) / 1000);
-		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx?RED:WHITE);
+		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
 		sprintf(freq_a_str, "%02d", (freq_a % 1000) / 10);
-		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx?RED:WHITE);
+		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
@@ -415,6 +458,7 @@ int main(void)
 	zmq_disconnect(zmq_pub, zmq_ipc);
 	zmq_ctx_destroy(&zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
+	system("kill -TERM `pidof python`"); // kill FG
 	CloseWindow();
 
 	return 0;
