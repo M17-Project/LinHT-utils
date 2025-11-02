@@ -195,7 +195,7 @@ int main(void)
 	sx1255_enable_rx(true);
 	sx1255_enable_tx(true);
 	sx1255_pa_enable(false);
-	system("tx_rx 0");
+	linht_ctrl_tx_rx_switch_set(true);
 
 	// keyboard
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
@@ -283,7 +283,7 @@ int main(void)
 				{
 					sx1255_enable_rx(false);
 					sx1255_pa_enable(true);
-					system("tx_rx 1"); // TODO: add a proper TX/RX RF switch control
+					linht_ctrl_tx_rx_switch_set(false);
 					linht_ctrl_red_led_set(true);
 					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
 					vfo_a_tx = true;
@@ -324,7 +324,7 @@ int main(void)
 				{
 					sx1255_enable_rx(true);
 					sx1255_pa_enable(false);
-					system("tx_rx 0"); // TODO: add a proper TX/RX RF switch control
+					linht_ctrl_tx_rx_switch_set(true);
 					linht_ctrl_red_led_set(false);
 					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
 					vfo_a_tx = false;
