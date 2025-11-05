@@ -23,8 +23,8 @@
 #define RES_Y 128
 
 // keymap states
-#define KEY_PRESS 1
-#define KEY_RELEASE 0
+#define KEY_PRESS 0
+#define KEY_RELEASE 1
 
 // return value
 int rval;
@@ -53,6 +53,8 @@ uint8_t pmt_len; // "SOT" and "EOT" PMTs are the same length - single variable i
 
 // states
 bool vfo_a_tx = false;
+time_t esc_start;
+bool esc_pressed = false;
 
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
@@ -267,6 +269,9 @@ int main(void)
 		conf->channels.vfo_0.extra.dst,
 		conf->channels.vfo_0.extra.can );
 	system(fg_str);
+	
+	// get time
+	esc_start = time(NULL);
 
 	// main loop
 	while (!WindowShouldClose())
@@ -311,7 +316,8 @@ int main(void)
 				}
 				else if (ev.code == KEY_ESC)
 				{
-					break;
+					esc_start = time(NULL);
+					esc_pressed = true;
 				}
 				else
 				{
@@ -330,12 +336,20 @@ int main(void)
 					vfo_a_tx = false;
 					fprintf(stderr, "PTT released\n");
 				}
+				else if (ev.code == KEY_ESC)
+				{
+					esc_pressed = false;
+				}
 				else
 				{
 					;
 				}
 			}
 		}
+		
+		// check if ESC button has been pressed for at least 5 seconds
+		if (time(NULL) - esc_start >= 5 && esc_pressed)
+			break;
 
 		BeginDrawing();
 
@@ -431,7 +445,6 @@ int main(void)
 		DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
 		DrawTexture(texture[1], 140, 84, WHITE); //'vfo b mute' icon
 
-		// Or if you want more control over positioning:
 		// Rectangle src = {0, 0, (float)texture.width, (float)texture.height};
 		// Rectangle dst = {0, 0, RES_X, RES_Y};
 		// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
@@ -460,6 +473,10 @@ int main(void)
 	cyaml_free(&cfg, &config_schema, conf, 0);
 	system("kill -TERM `pidof python`"); // kill FG
 	CloseWindow();
+	
+	// device shutdown workaround
+	// TODO: fix it
+	system("shutdown now");
 
 	return 0;
 }
