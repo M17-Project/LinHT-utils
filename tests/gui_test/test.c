@@ -476,9 +476,9 @@ int main(void)
 	system("kill -TERM `pidof python`"); // kill FG
 	CloseWindow();
 	
-	// device shutdown workaround
+	// device shutdown
 	// TODO: fix it
-	system("shutdown now");
+	// system("shutdown now");
 
 	return 0;
 }
