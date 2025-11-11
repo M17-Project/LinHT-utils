@@ -214,6 +214,7 @@ int main(void)
 		fspec = fopen("/tmp/fft", "rb");
 		for(uint16_t i=0; i<256; i++)
 			fread(&val[i], sizeof(float), 1, fspec);
+		fclose(fspec);
 		
 		//scale and offset
 		for(uint16_t i=0; i<256; i++)
@@ -296,7 +297,7 @@ int main(void)
 	UnloadFont(customFont14);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
-	fclose(fspec);
+	//fclose(fspec);
 	system("kill -TERM `pidof python`");
     CloseWindow();
     
