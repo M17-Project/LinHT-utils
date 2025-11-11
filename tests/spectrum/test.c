@@ -17,26 +17,7 @@
 #define RES_X 160
 #define RES_Y 128
 
-// keymap and states
-#define LINHT_KEY_ESC 1
-#define LINHT_KEY_1 2
-#define LINHT_KEY_2 3
-#define LINHT_KEY_3 4
-#define LINHT_KEY_4 5
-#define LINHT_KEY_5 6
-#define LINHT_KEY_6 7
-#define LINHT_KEY_7 8
-#define LINHT_KEY_8 9
-#define LINHT_KEY_9 10
-#define LINHT_KEY_0 11
-#define LINHT_KEY_ENTER 28
-#define LINHT_KEY_HASH 43
-#define LINHT_KEY_KPASTERISK 55
-#define LINHT_KEY_F1 59
-#define LINHT_KEY_F2 60
-#define LINHT_KEY_UP 103
-#define LINHT_KEY_DOWN 108
-
+// key states
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
 
@@ -56,6 +37,9 @@ uint32_t *framebuffer; // framebuffer
 // keyboard
 const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
+
+// file with FFT data
+FILE *fspec;
 
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
@@ -140,6 +124,14 @@ int main(void)
 	{
 		return rval;
 	}
+	
+	// execute FFT generating flowgraph
+	fprintf(stderr, "Executing flowgraph...\n");
+	system("python $FG_PATH/som_spectrum_test.py &> /dev/null &");
+	sleep(2);
+	
+	// open the FFT file
+	fspec = fopen("/tmp/fft", "rb");
 
 	Image img;
 	Texture2D texture[6] = {0};
@@ -196,17 +188,17 @@ int main(void)
 		{
 			if (ev.value == KEY_PRESS)
 			{
-				if (ev.code == LINHT_KEY_UP)
+				if (ev.code == KEY_UP)
 				{
 					freq_a += 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if (ev.code == LINHT_KEY_DOWN)
+				else if (ev.code == KEY_DOWN)
 				{
 					freq_a -= 12500;
 					sx1255_set_rx_freq(freq_a);
 				}
-				else if (ev.code == LINHT_KEY_ESC)
+				else if (ev.code == KEY_ESC)
 				{
 					break;
 				}
@@ -217,10 +209,9 @@ int main(void)
 			}
 		}
 		
-		FILE *fspec = fopen("/tmp/fft", "rb");
+		// read FFT data
 		for(uint16_t i=0; i<256; i++)
 			fread(&val[i], sizeof(float), 1, fspec);
-		fclose(fspec);
 		
 		//scale and offset
 		for(uint16_t i=0; i<256; i++)
@@ -303,6 +294,8 @@ int main(void)
 	UnloadFont(customFont14);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
+	fclose(fspec);
+	system("kill -TERM `pidof python`");
     CloseWindow();
     
     return 0;
