@@ -131,7 +131,7 @@ int main(void)
 	sleep(2);
 	
 	// open the FFT file
-	fspec = fopen("/tmp/fft", "rb");
+	//fspec = fopen("/tmp/fft", "rb");
 
 	Image img;
 	Texture2D texture[6] = {0};
@@ -210,6 +210,8 @@ int main(void)
 		}
 		
 		// read FFT data
+		//fseek(fspec, 0, SEEK_SET);
+		fspec = fopen("/tmp/fft", "rb");
 		for(uint16_t i=0; i<256; i++)
 			fread(&val[i], sizeof(float), 1, fspec);
 		
