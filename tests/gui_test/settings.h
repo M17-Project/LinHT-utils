@@ -12,7 +12,7 @@ typedef struct
 {
     float freq_corr;
     bool calibrated;
-    float i_dc, q_dc, iq_bal, iq_crosstalk;
+    float i_dc, q_dc, iq_bal, iq_theta;
     char *dpd_type;
     float dpd_0, dpd_1, dpd_2;
     bool bias_t;
@@ -89,7 +89,7 @@ cyaml_schema_field_t rf_fields[] =
 	CYAML_FIELD_FLOAT("i_dc", CYAML_FLAG_DEFAULT, rf_settings_t, i_dc),
 	CYAML_FIELD_FLOAT("q_dc", CYAML_FLAG_DEFAULT, rf_settings_t, q_dc),
 	CYAML_FIELD_FLOAT("iq_bal", CYAML_FLAG_DEFAULT, rf_settings_t, iq_bal),
-	CYAML_FIELD_FLOAT("iq_crosstalk", CYAML_FLAG_DEFAULT, rf_settings_t, iq_crosstalk),
+	CYAML_FIELD_FLOAT("iq_theta", CYAML_FLAG_DEFAULT, rf_settings_t, iq_theta),
 	CYAML_FIELD_STRING_PTR("dpd_type", CYAML_FLAG_POINTER, rf_settings_t, dpd_type, 0, CYAML_UNLIMITED),
 	CYAML_FIELD_FLOAT("dpd_0", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_0),
 	CYAML_FIELD_FLOAT("dpd_1", CYAML_FLAG_DEFAULT, rf_settings_t, dpd_1),
