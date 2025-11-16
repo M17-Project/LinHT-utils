@@ -127,23 +127,23 @@ void load_gfx(void)
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_WALLPAPER] = LoadTextureFromImage(img);
 
-	img = LoadImage(IMG_PATH "mute.png");
+	img = LoadImage(IMG_PATH "/mute.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_MUTE] = LoadTextureFromImage(img);
 
-	img = LoadImage(IMG_PATH "gnss.png");
+	img = LoadImage(IMG_PATH "/gnss.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_GNSS] = LoadTextureFromImage(img);
 
-	img = LoadImage(IMG_PATH "batt_100.png");
+	img = LoadImage(IMG_PATH "/batt_100.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_BATT_100] = LoadTextureFromImage(img);
 
-	img = LoadImage(IMG_PATH "vfo_act.png");
+	img = LoadImage(IMG_PATH "/vfo_act.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_VFO_ACT] = LoadTextureFromImage(img);
 
-	img = LoadImage(IMG_PATH "vfo_inact.png");
+	img = LoadImage(IMG_PATH "/vfo_inact.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_VFO_INACT] = LoadTextureFromImage(img);
 
@@ -511,12 +511,8 @@ int main(void)
 
 	// Cleanup
 	fprintf(stderr, "Exit code caught. Cleaning up...\n");
-	UnloadTexture(texture[0]);
-	UnloadTexture(texture[1]);
-	UnloadTexture(texture[2]);
-	UnloadTexture(texture[3]);
-	UnloadTexture(texture[4]);
-	UnloadTexture(texture[5]);
+	for (uint8_t i=0; i<IMG_COUNT; i++)
+		UnloadTexture(texture[i]);
 	UnloadFont(customFont);
 	UnloadFont(customFont10);
 	UnloadFont(customFont12);
