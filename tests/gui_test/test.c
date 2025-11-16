@@ -199,9 +199,9 @@ int main(void)
 	sx1255_reset();
 	if(rf_rate == 500)
 		sx1255_set_rate(SX1255_RATE_500K);
-	else if(conf->frontend.rf_sample_rate == 250)
+	else if(rf_rate == 250)
 		sx1255_set_rate(SX1255_RATE_250K);
-	else if(conf->frontend.rf_sample_rate == 125)
+	else if(rf_rate == 125)
 		sx1255_set_rate(SX1255_RATE_125K);
 	sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 	sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
@@ -320,7 +320,7 @@ int main(void)
 				{
 					vfo_a_rx_f -= 12500; vfo_a_tx_f -= 12500;
 					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
-					sx1255_set_tx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
 				}
 				else if (ev.code == KEY_LEFT)
 				{
