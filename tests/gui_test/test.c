@@ -53,6 +53,7 @@ uint8_t pmt_len; // "SOT" and "EOT" PMTs are the same length - single variable i
 
 // states
 bool vfo_a_tx = false;
+bool vfo_b_tx = false;
 time_t esc_start;
 bool esc_pressed = false;
 
@@ -144,9 +145,7 @@ void sx1255_pa_enable(bool ena)
 
 int main(void)
 {
-	// settings (clean this up)
-	uint32_t freq_a = 433475000, freq_b = 439212500;
-
+	// load settings
 	cyaml_config_t cfg =
 		{
 			.log_level = CYAML_LOG_DEBUG,
@@ -160,18 +159,29 @@ int main(void)
 		fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
 		return -1;
 	}
+	
+	// settings (clean this up)
+	uint32_t vfo_a_rx_f = conf->channels.vfo_0.rx_freq;
+	uint32_t vfo_a_tx_f = conf->channels.vfo_0.tx_freq;
+	uint32_t vfo_b_rx_f = conf->channels.vfo_1.rx_freq;
+	uint32_t vfo_b_tx_f = conf->channels.vfo_1.tx_freq;
+	uint16_t rf_rate = conf->frontend.rf_sample_rate;
+	float freq_corr = conf->settings.rf.freq_corr;
 
 	// settings printout
 	if (1)
 	{
 		fprintf(stderr, "Loaded settings:\n");
-		fprintf(stderr, "VCO A RX: %d Hz\n", conf->channels.vfo_0.rx_freq);
-		fprintf(stderr, "VCO A TX: %d Hz\n", conf->channels.vfo_0.tx_freq);
-		fprintf(stderr, "VCO B RX: %d Hz\n", conf->channels.vfo_1.rx_freq);
-		fprintf(stderr, "VCO B TX: %d Hz\n", conf->channels.vfo_1.tx_freq);
-		fprintf(stderr, "Frequency correction: %.3f ppm\n", conf->settings.rf.freq_corr);
-		fprintf(stderr, "In-phase DC offset: %.3f\n", conf->settings.rf.i_dc);
-		fprintf(stderr, "Quadrature DC offset: %.3f\n", conf->settings.rf.q_dc);
+		fprintf(stderr, "VCO A RX: %d Hz\n", vfo_a_rx_f);
+		fprintf(stderr, "VCO A TX: %d Hz\n", vfo_a_tx_f);
+		fprintf(stderr, "VCO B RX: %d Hz\n", vfo_b_rx_f);
+		fprintf(stderr, "VCO B TX: %d Hz\n", vfo_b_tx_f);
+		fprintf(stderr, "Freq. corr.: %+.3f ppm\n", freq_corr);
+		fprintf(stderr, "I DC offset: %+.3f\n", conf->settings.rf.i_dc);
+		fprintf(stderr, "Q DC offset: %+.3f\n", conf->settings.rf.q_dc);
+		fprintf(stderr, "IQ balance:  %+.4f\n", conf->settings.rf.iq_bal);
+		fprintf(stderr, "IQ angle:    %+.1f deg.\n", conf->settings.rf.iq_theta);
+		fprintf(stderr, "RF sample rate: %d kHz\n", rf_rate);
 		fprintf(stderr, "-------------------------\n\n");
 	}
 
@@ -179,7 +189,7 @@ int main(void)
 	linht_ctrl_green_led_set(false);
 	linht_ctrl_red_led_set(false);
 
-	// SX1255
+	// SX1255 init and config
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
 	{
 		fprintf(stderr, "Can not initialize device\nExiting\n");
@@ -187,9 +197,14 @@ int main(void)
 	}
 
 	sx1255_reset();
-	sx1255_set_rate(SX1255_RATE_500K);
-	sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
-	sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+	if(rf_rate == 500)
+		sx1255_set_rate(SX1255_RATE_500K);
+	else if(conf->frontend.rf_sample_rate == 250)
+		sx1255_set_rate(SX1255_RATE_250K);
+	else if(conf->frontend.rf_sample_rate == 125)
+		sx1255_set_rate(SX1255_RATE_125K);
+	sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+	sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
 	sx1255_set_lna_gain(20);
 	sx1255_set_pga_gain(24);
 	sx1255_set_dac_gain(0);
@@ -297,15 +312,15 @@ int main(void)
 				}
 				else if (ev.code == KEY_UP)
 				{
-					freq_a += 12500;
-					sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
-					sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+					vfo_a_rx_f += 12500; vfo_a_tx_f += 12500; 
+					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
 				}
 				else if (ev.code == KEY_DOWN)
 				{
-					freq_a -= 12500;
-					sx1255_set_rx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
-					sx1255_set_tx_freq(freq_a * (1.0 + conf->settings.rf.freq_corr * 1e-6));
+					vfo_a_rx_f -= 12500; vfo_a_tx_f -= 12500;
+					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+					sx1255_set_tx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 				}
 				else if (ev.code == KEY_LEFT)
 				{
@@ -418,6 +433,7 @@ int main(void)
 		DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 		char freq_a_str[10];
+		uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
 		sprintf(freq_a_str, "%d.%03d", freq_a / 1000000, (freq_a - (freq_a / 1000000) * 1000000) / 1000);
 		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
 		sprintf(freq_a_str, "%02d", (freq_a % 1000) / 10);
@@ -437,6 +453,7 @@ int main(void)
 		DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
 		char freq_b_str[10];
+		uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
 		sprintf(freq_b_str, "%d.%03d", freq_b / 1000000, (freq_b - (freq_b / 1000000) * 1000000) / 1000);
 		DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
 		sprintf(freq_b_str, "%02d", (freq_b % 1000) / 10);

@@ -28,6 +28,7 @@ typedef struct
 
 typedef struct
 {
+	uint16_t rf_sample_rate;
     float rf_power_out_sp;
     uint8_t rf_switch;
     float atten_0, atten_1, lna_gain, pga_gain, dac_gain, mix_gain;
@@ -109,6 +110,7 @@ cyaml_schema_field_t hw_settings_fields[] =
 
 cyaml_schema_field_t frontend_fields[] =
 {
+	CYAML_FIELD_UINT("rf_sample_rate", CYAML_FLAG_DEFAULT, frontend_t, rf_sample_rate),
 	CYAML_FIELD_FLOAT("rf_power_out_sp", CYAML_FLAG_DEFAULT, frontend_t, rf_power_out_sp),
 	CYAML_FIELD_UINT("rf_switch", CYAML_FLAG_DEFAULT, frontend_t, rf_switch),
 	CYAML_FIELD_FLOAT("atten_0", CYAML_FLAG_DEFAULT, frontend_t, atten_0),
