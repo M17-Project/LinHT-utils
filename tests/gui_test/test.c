@@ -19,12 +19,32 @@
 #include <cyaml/cyaml.h>
 #include "settings.h"
 
-#define RES_X 160
-#define RES_Y 128
-
 // keymap states
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
+
+// GFX
+#define RES_X 160
+#define RES_Y 128
+#define IMG_PATH "/usr/share/linht/icons"
+
+bool raylib_debug = false;
+
+enum
+{
+	IMG_WALLPAPER,
+	IMG_MUTE,
+	IMG_GNSS,
+	IMG_BATT_100,
+	IMG_VFO_ACT,
+	IMG_VFO_INACT,
+	IMG_COUNT = IMG_VFO_INACT + 1
+};
+
+Texture2D texture[IMG_COUNT];
+
+// settings
+const char *settings_file = "/usr/share/linht/settings.yaml";
 
 // return value
 int rval;
@@ -45,7 +65,7 @@ const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
 
 // ZeroMQ and PMT
-char *zmq_ipc = "ipc:///tmp/ptt_msg";
+const char *zmq_ipc = "ipc:///tmp/ptt_msg";
 
 uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
@@ -97,6 +117,37 @@ void fb_cleanup(uint32_t *buffer, size_t ssize, int fhandle)
 {
 	munmap(buffer, ssize);
 	close(fhandle);
+}
+
+void load_gfx(void)
+{
+	Image img;
+
+	img = LoadImage(IMG_PATH "/wallpaper.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_WALLPAPER] = LoadTextureFromImage(img);
+
+	img = LoadImage(IMG_PATH "mute.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_MUTE] = LoadTextureFromImage(img);
+
+	img = LoadImage(IMG_PATH "gnss.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_GNSS] = LoadTextureFromImage(img);
+
+	img = LoadImage(IMG_PATH "batt_100.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_BATT_100] = LoadTextureFromImage(img);
+
+	img = LoadImage(IMG_PATH "vfo_act.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_VFO_ACT] = LoadTextureFromImage(img);
+
+	img = LoadImage(IMG_PATH "vfo_inact.png");
+	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+	texture[IMG_VFO_INACT] = LoadTextureFromImage(img);
+
+	UnloadImage(img);
 }
 
 int kbd_init(int *fhandle, const char *path)
@@ -153,7 +204,7 @@ int main(void)
 		};
 
 	config_t *conf = NULL;
-	cyaml_err_t err = cyaml_load_file("/usr/share/linht/settings.yaml", &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
+	cyaml_err_t err = cyaml_load_file(settings_file, &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
 	if (err != CYAML_OK)
 	{
 		fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
@@ -172,17 +223,17 @@ int main(void)
 	if (1)
 	{
 		fprintf(stderr, "Loaded settings:\n");
-		fprintf(stderr, "VCO A RX: %d Hz\n", vfo_a_rx_f);
-		fprintf(stderr, "VCO A TX: %d Hz\n", vfo_a_tx_f);
-		fprintf(stderr, "VCO B RX: %d Hz\n", vfo_b_rx_f);
-		fprintf(stderr, "VCO B TX: %d Hz\n", vfo_b_tx_f);
-		fprintf(stderr, "Freq. corr.: %+.3f ppm\n", freq_corr);
-		fprintf(stderr, "I DC offset: %+.3f\n", conf->settings.rf.i_dc);
-		fprintf(stderr, "Q DC offset: %+.3f\n", conf->settings.rf.q_dc);
-		fprintf(stderr, "IQ balance:  %+.4f\n", conf->settings.rf.iq_bal);
-		fprintf(stderr, "IQ angle:    %+.1f deg.\n", conf->settings.rf.iq_theta);
-		fprintf(stderr, "RF sample rate: %d kHz\n", rf_rate);
-		fprintf(stderr, "-------------------------\n\n");
+		fprintf(stderr, "      VCO A RX  %d Hz\n", vfo_a_rx_f);
+		fprintf(stderr, "            TX  %d Hz\n", vfo_a_tx_f);
+		fprintf(stderr, "      VCO B RX  %d Hz\n", vfo_b_rx_f);
+		fprintf(stderr, "            TX  %d Hz\n", vfo_b_tx_f);
+		fprintf(stderr, "   Freq. corr.  %+.3f ppm\n", freq_corr);
+		fprintf(stderr, "   I DC offset  %+.3f\n", conf->settings.rf.i_dc);
+		fprintf(stderr, "   Q DC offset  %+.3f\n", conf->settings.rf.q_dc);
+		fprintf(stderr, "    IQ balance  %+.4f\n", conf->settings.rf.iq_bal);
+		fprintf(stderr, "      IQ angle  %+.1f deg.\n", conf->settings.rf.iq_theta);
+		fprintf(stderr, "RF sample rate  %d kHz\n", rf_rate);
+		fprintf(stderr, "----------------------------\n");
 	}
 
 	// LEDs
@@ -192,7 +243,7 @@ int main(void)
 	// SX1255 init and config
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
 	{
-		fprintf(stderr, "Can not initialize device\nExiting\n");
+		fprintf(stderr, "Can not initialize SX1255 device.\nExiting.\n");
 		return -1;
 	}
 
@@ -213,6 +264,7 @@ int main(void)
 	sx1255_enable_tx(true);
 	sx1255_pa_enable(false);
 	linht_ctrl_tx_rx_switch_set(true);
+	fprintf(stderr, "SX1255 setup finished\n");
 
 	// keyboard
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
@@ -234,6 +286,9 @@ int main(void)
 	string_to_pmt(eot_pmt, "EOT");
 
 	// init Raylib
+	fprintf(stderr, "Initializing Raylib...\n");
+	if (!raylib_debug)
+		SetTraceLogLevel(LOG_NONE);
 	InitWindow(RES_X, RES_Y, "GUI test");
 
 	Font customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
@@ -241,43 +296,17 @@ int main(void)
 	Font customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
 
 	// load images
-	Image img;
-	Texture2D texture[6] = {0};
-
-	// load the wallpaper
-	img = LoadImage("/usr/share/linht/icons/wallpaper.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[0] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/mute.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[1] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/gnss.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[2] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/batt_100.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[3] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/vfo_act.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[4] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/vfo_inact.png");
-	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-	texture[5] = LoadTextureFromImage(img);
-
-	UnloadImage(img);
+	load_gfx();
 
 	// set low FPS for embedded display
 	SetTargetFPS(5);
 
-	//execute FG
-	fprintf(stderr, "Executing GNU Radio flowgraph\n");
-	char fg_str[256] = {0};
-	sprintf(fg_str, "python /usr/share/linht/grc/som_m17_ptt.py -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
+	//execute FG, TODO: the parameters are only OK for M17 FG
+	char *fg_path = conf->channels.vfo_0.fg;
+	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
+	char fg_str[256];
+	sprintf(fg_str, "python %s -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
+		fg_path,
 		conf->settings.rf.i_dc,
 		conf->settings.rf.q_dc,
 		conf->channels.vfo_0.extra.src,
@@ -287,6 +316,9 @@ int main(void)
 	
 	// get time
 	esc_start = time(NULL);
+	
+	// ready!
+	fprintf(stderr, "Ready! Awaiting commands...\n");
 
 	// main loop
 	while (!WindowShouldClose())
@@ -374,7 +406,7 @@ int main(void)
 		ClearBackground(BLACK);
 
 		// draw the wallpaper
-		DrawTexture(texture[0], 0, 0, WHITE);
+		DrawTexture(texture[IMG_WALLPAPER], 0, 0, WHITE);
 
 		// draw header
 		DrawRectangle(0, 0, RES_X, 17, (Color){0x20, 0x20, 0x20, 0xFF});
@@ -388,7 +420,7 @@ int main(void)
 		DrawTextEx(customFont, time_s, (Vector2){2.0f, 2.0f}, 14.0f, 0, WHITE);
 
 		//'gnss' icon
-		DrawTexture(texture[2], RES_X - 40, 1, WHITE);
+		DrawTexture(texture[IMG_GNSS], RES_X - 40, 1, WHITE);
 
 		// battery voltage display
 		static char bv[8] = {0};
@@ -424,12 +456,12 @@ int main(void)
 				bv_col = RED;
 		}
 
-		// icon or text
-		// DrawTexture(texture[3], RES_X - 24, 2, WHITE);
+		// battery voltage - icon or text
+		// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
 		DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
 
 		// VFO A
-		DrawTexture(texture[4], 2, 23, WHITE);
+		DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
 		DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 		char freq_a_str[10];
@@ -441,15 +473,16 @@ int main(void)
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "M17", (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
-		DrawTextEx(customFont12, "@ALL", (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
-		// DrawTexture(texture[1], 140, 28, WHITE); //'vfo a mute' icon
+		DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
+		DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
+		DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
+		// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
 
 		// horizontal separating bar
 		DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
 
 		// VFO B
-		DrawTexture(texture[4], 2, 79, WHITE);
+		DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
 		DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
 		char freq_b_str[10];
@@ -462,8 +495,9 @@ int main(void)
 		DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
-		DrawTexture(texture[1], 140, 84, WHITE); //'vfo b mute' icon
+		DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
 
+		// test
 		// Rectangle src = {0, 0, (float)texture.width, (float)texture.height};
 		// Rectangle dst = {0, 0, RES_X, RES_Y};
 		// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
@@ -476,6 +510,7 @@ int main(void)
 	}
 
 	// Cleanup
+	fprintf(stderr, "Exit code caught. Cleaning up...\n");
 	UnloadTexture(texture[0]);
 	UnloadTexture(texture[1]);
 	UnloadTexture(texture[2]);
@@ -492,6 +527,8 @@ int main(void)
 	cyaml_free(&cfg, &config_schema, conf, 0);
 	system("kill -TERM `pidof python`"); // kill FG
 	CloseWindow();
+	
+	fprintf(stderr, "Cleanup done. Exiting.\n");
 	
 	// device shutdown
 	// TODO: fix it
