@@ -120,8 +120,8 @@ int main(void)
 		zmq_send(zmq_pub, (uint8_t*)rx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT);
 	
 		//TX
-		zmq_recv(zmq_sub, (uint8_t*)tx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT);
-		snd_pcm_writei(bsb_tx, tx_buff, ZMQ_LEN/2);
+		if (zmq_recv(zmq_sub, (uint8_t*)tx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT) == ZMQ_LEN)
+			snd_pcm_writei(bsb_tx, tx_buff, ZMQ_LEN/2);
 	}
 	
 	// shouldn't get here
