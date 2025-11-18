@@ -10,7 +10,7 @@
 #define TX_IPC  "/tmp/bsb_tx"
 
 uint32_t rate = 500000;
-int32_t rx_buff[ZMQ_LEN], tx_buff[ZMQ_LEN];
+int32_t rx_buff[ZMQ_LEN], tx_buff[ZMQ_LEN*16];
 int retval;
 snd_pcm_t *bsb_rx;
 snd_pcm_t *bsb_tx;
@@ -40,6 +40,7 @@ int main(void)
 	zmq_ctx = zmq_ctx_new();
     zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 	zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
+	zmq_setsockopt(zmq_sub, ZMQ_SUBSCRIBE, "", 0); // no filters
 	
 	if (zmq_bind(zmq_pub, "ipc://" RX_IPC) != 0) // "tcp://*:17001"
     {
@@ -51,7 +52,7 @@ int main(void)
     {
         printf("ZeroMQ: SUB binding error.\nExiting.\n");
         return -1;
-    }	
+    }
 	
 	retval = snd_pcm_open(&bsb_rx, BSB_DEV, SND_PCM_STREAM_CAPTURE, 0);
 	if (retval != 0)
@@ -67,6 +68,7 @@ int main(void)
 		return -1;
 	}
 	
+	// RX
 	snd_pcm_hw_params_malloc(&dev_params);
     snd_pcm_hw_params_any(bsb_rx, dev_params);
     snd_pcm_hw_params_set_access(bsb_rx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED);
@@ -75,7 +77,17 @@ int main(void)
     snd_pcm_hw_params_set_rate(bsb_rx, dev_params, rate, 0);
     snd_pcm_hw_params_set_period_size(bsb_rx, dev_params, ZMQ_LEN, 0);
     snd_pcm_hw_params(bsb_rx, dev_params);
-	snd_pcm_hw_params(bsb_tx, dev_params);
+    snd_pcm_hw_params_free(dev_params);
+	
+	// TX
+	snd_pcm_hw_params_malloc(&dev_params);
+    snd_pcm_hw_params_any(bsb_tx, dev_params);
+    snd_pcm_hw_params_set_access(bsb_tx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(bsb_tx, dev_params, SND_PCM_FORMAT_S32_LE);
+    snd_pcm_hw_params_set_channels(bsb_tx, dev_params, 2);
+    snd_pcm_hw_params_set_rate(bsb_tx, dev_params, rate, 0);
+    snd_pcm_hw_params_set_period_size(bsb_tx, dev_params, ZMQ_LEN, 0);
+    snd_pcm_hw_params(bsb_tx, dev_params);
     snd_pcm_hw_params_free(dev_params);
 	
     retval = snd_pcm_prepare(bsb_rx);
@@ -95,7 +107,7 @@ int main(void)
 	fprintf(stderr, "Running...\n");
 	
 	while (1)
-	{
+	{	/*
 		// RX
 		snd_pcm_sframes_t n = snd_pcm_readi(bsb_rx, rx_buff, ZMQ_LEN/2);
 
@@ -118,10 +130,28 @@ int main(void)
 		}
 		
 		zmq_send(zmq_pub, (uint8_t*)rx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT);
-	
-		//TX
-		if (zmq_recv(zmq_sub, (uint8_t*)tx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT) == ZMQ_LEN)
-			snd_pcm_writei(bsb_tx, tx_buff, ZMQ_LEN/2);
+		*/
+		// TX
+		int r = zmq_recv(zmq_sub, (uint8_t*)tx_buff, sizeof(tx_buff), ZMQ_DONTWAIT);
+		if (r > 0)
+		{
+			uint8_t pos = 0;
+			do
+			{
+				snd_pcm_sframes_t written;
+				do
+				{
+					written = snd_pcm_writei(bsb_tx, &tx_buff[ZMQ_LEN*pos], ZMQ_LEN/2);
+					if (written < 0)
+						written = snd_pcm_recover(bsb_tx, written, 1);
+				}
+				while (written < 0);
+				
+				r -= ZMQ_LEN*4;
+				pos++;
+			} 
+			while (r > 0);
+		}
 	}
 	
 	// shouldn't get here
