@@ -136,7 +136,7 @@ int main(int argc, char *argv[])
     void *zmq_ctx = zmq_ctx_new();
     void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
-    if (zmq_connect(zmq_pub, zmq_ipc) != 0)
+    if (zmq_bind(zmq_pub, zmq_ipc) != 0)
     {
         printf("ZeroMQ: Error connecting to Unix socket %s.\nExiting.\n", zmq_ipc);
         return 1;
