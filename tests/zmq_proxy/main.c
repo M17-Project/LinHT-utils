@@ -6,7 +6,8 @@
 #include <alsa/asoundlib.h>
 
 #define ZMQ_LEN 2048
-#define BSB_DEV "hw:SX1255"
+#define BSB_RX_DEV "hw:SX1255"
+#define BSB_TX_DEV "hw:SX1255,1"
 #define RX_IPC  "/tmp/bsb_rx"
 #define TX_IPC  "/tmp/bsb_tx"
 #define PTT_IPC "ipc:///tmp/ptt_msg"
@@ -86,14 +87,14 @@ int main(void)
         return -1;
     }	
 	
-	retval = snd_pcm_open(&bsb_rx, BSB_DEV, SND_PCM_STREAM_CAPTURE, 0);
+	retval = snd_pcm_open(&bsb_rx, BSB_RX_DEV, SND_PCM_STREAM_CAPTURE, 0);
 	if (retval != 0)
 	{
 		fprintf(stderr, "Failed to open baseband input device\n");
 		return -1;
 	}
 
-	retval = snd_pcm_open(&bsb_tx, BSB_DEV, SND_PCM_STREAM_PLAYBACK, 0);
+	retval = snd_pcm_open(&bsb_tx, BSB_TX_DEV, SND_PCM_STREAM_PLAYBACK, 0);
 	if (retval != 0)
 	{
 		fprintf(stderr, "Failed to open baseband output device\n");
