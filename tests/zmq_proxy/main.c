@@ -26,6 +26,9 @@ void *zmq_ptt_sub;
 
 uint8_t sot_pmt[10], eot_pmt[10];
 
+struct timeval tv_start, tv_now;
+int64_t t_sust = 4*40000;	//default sustain time in microseconds (4 M17 frames)
+
 typedef enum
 {
 	STATE_RX,
@@ -56,6 +59,37 @@ uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 	strcpy((char *)&pmt[3], msg);
 
 	return 3 + strlen(msg);
+}
+
+int64_t time_diff_us(struct timeval a, struct timeval b)
+{
+    return (a.tv_sec - b.tv_sec)*1000000L + (a.tv_usec - b.tv_usec);
+}
+
+void tx_stop_cleanup(void)
+{
+	// stop/reset PCM devices
+	snd_pcm_drop(bsb_tx);      	// stop TX immediately
+	snd_pcm_prepare(bsb_tx);   	// reset TX device for next use
+	snd_pcm_drop(bsb_rx);      	// stop device
+	snd_pcm_prepare(bsb_rx);   	// reset device
+	
+	// switch state
+	radio_state = STATE_RX;
+}
+void rx_stop_cleanup(void)
+{
+	// stop/reset PCM devices
+	snd_pcm_drop(bsb_rx);		// stop RX immediately
+	snd_pcm_prepare(bsb_rx);    // reset RX device for next use
+	snd_pcm_drop(bsb_tx);       // stop device
+	snd_pcm_prepare(bsb_tx);    // reset device
+	
+	// switch state
+	radio_state = STATE_TX;
+	
+	// make sure the TX starts with new baseband data (discard queued baseband)
+	while (zmq_recv(zmq_sub, tx_buff, sizeof(tx_buff), ZMQ_DONTWAIT) > 0);
 }
 
 int main(void)
@@ -147,35 +181,31 @@ int main(void)
 		int r = zmq_recv(zmq_ptt_sub, (uint8_t*)pmt_buff, sizeof(pmt_buff), ZMQ_DONTWAIT);
 		if (r > 0)
 		{
+			// "SOT"
 			if (memcmp(pmt_buff, sot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT pressed\n");
-				
-				// switch PCM devices
-				snd_pcm_drop(bsb_rx);		// stop RX immediately
-				snd_pcm_prepare(bsb_rx);    // reset RX device for next use
-				snd_pcm_drop(bsb_tx);       // stop device
-				snd_pcm_prepare(bsb_tx);    // reset device
-				
-				radio_state = STATE_TX;
-				
-				// make sure the TX starts with new baseband data (discard queued baseband)
-				while (zmq_recv(zmq_sub, tx_buff, sizeof(tx_buff), ZMQ_DONTWAIT) > 0);
+				rx_stop_cleanup();
 			}
+			
+			// "EOT"
 			else if (memcmp(pmt_buff, eot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT released\n");
-				
-				// switch PCM devices
-				snd_pcm_drop(bsb_tx);      	// stop TX immediately
-				snd_pcm_prepare(bsb_tx);   	// reset TX device for next use
-				snd_pcm_drop(bsb_rx);      	// stop device
-				snd_pcm_prepare(bsb_rx);   	// reset device
-				
-				radio_state = STATE_RX;
+				gettimeofday(&tv_start, NULL);
 			}
+			
+			// "SUST%d" TODO: add length check
+			else if (strncmp((char*)&pmt_buff[3], "SUST", 4) == 0)
+			{
+				int32_t val = atoi((char*)&pmt_buff[7]);
+				t_sust = (int64_t)val*1000;
+				fprintf(stderr, "Setting sustain time to %d ms\n", val);
+			}
+			
+			// unrecognized PMT message
 			else
-				fprintf(stderr, "Unrecognized PMT\n");
+				fprintf(stderr, "Unrecognized PMT message\n");
 		}
 		
 		// RX
@@ -226,6 +256,19 @@ int main(void)
 					pos++;
 				} 
 				while (r > 0);
+			}
+			
+			// check if the "tx sustain" time has elapsed
+			if (tv_start.tv_sec != 0)
+			{
+				gettimeofday(&tv_now, NULL);
+				if (time_diff_us(tv_now, tv_start) >= t_sust)
+				{
+					// call the TX stop&cleanup function
+					tx_stop_cleanup();
+					fprintf(stderr, " TX sustain time elapsed\n");
+					tv_start.tv_sec = 0;
+				}
 			}
 		}
 	}
