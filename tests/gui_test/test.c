@@ -276,9 +276,9 @@ int main(void)
 	void *zmq_ctx = zmq_ctx_new();
 	void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
-	if (zmq_connect(zmq_pub, zmq_ipc) != 0)
+	if (zmq_bind(zmq_pub, zmq_ipc) != 0)
 	{
-		fprintf(stderr, "ZeroMQ: Error connecting to Unix socket %s.\nExiting.\n", zmq_ipc);
+		fprintf(stderr, "ZeroMQ: Error binding to Unix socket %s.\nExiting.\n", zmq_ipc);
 		return -1;
 	}
 
@@ -518,7 +518,7 @@ int main(void)
 	UnloadFont(customFont12);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
-	zmq_disconnect(zmq_pub, zmq_ipc);
+	zmq_unbind(zmq_pub, zmq_ipc);
 	zmq_ctx_destroy(&zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
 	system("kill -TERM `pidof python`"); // kill FG
