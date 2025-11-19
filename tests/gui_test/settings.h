@@ -31,7 +31,10 @@ typedef struct
 	uint16_t rf_sample_rate;
     float rf_power_out_sp;
     uint8_t rf_switch;
-    float atten_0, atten_1, lna_gain, pga_gain, dac_gain, mix_gain;
+    float atten_0, atten_1;
+	uint8_t lna_gain, pga_gain;
+	int8_t dac_gain;
+	float mix_gain;
     bool tx_enabled, rx_enabled;
 } frontend_t;
 
@@ -115,9 +118,9 @@ cyaml_schema_field_t frontend_fields[] =
 	CYAML_FIELD_UINT("rf_switch", CYAML_FLAG_DEFAULT, frontend_t, rf_switch),
 	CYAML_FIELD_FLOAT("atten_0", CYAML_FLAG_DEFAULT, frontend_t, atten_0),
 	CYAML_FIELD_FLOAT("atten_1", CYAML_FLAG_DEFAULT, frontend_t, atten_1),
-	CYAML_FIELD_FLOAT("lna_gain", CYAML_FLAG_DEFAULT, frontend_t, lna_gain),
-	CYAML_FIELD_FLOAT("pga_gain", CYAML_FLAG_DEFAULT, frontend_t, pga_gain),
-	CYAML_FIELD_FLOAT("dac_gain", CYAML_FLAG_DEFAULT, frontend_t, dac_gain),
+	CYAML_FIELD_UINT("lna_gain", CYAML_FLAG_DEFAULT, frontend_t, lna_gain),
+	CYAML_FIELD_UINT("pga_gain", CYAML_FLAG_DEFAULT, frontend_t, pga_gain),
+	CYAML_FIELD_INT("dac_gain", CYAML_FLAG_DEFAULT, frontend_t, dac_gain),
 	CYAML_FIELD_FLOAT("mix_gain", CYAML_FLAG_DEFAULT, frontend_t, mix_gain),
 	CYAML_FIELD_BOOL("tx_enabled", CYAML_FLAG_DEFAULT, frontend_t, tx_enabled),
 	CYAML_FIELD_BOOL("rx_enabled", CYAML_FLAG_DEFAULT, frontend_t, rx_enabled),

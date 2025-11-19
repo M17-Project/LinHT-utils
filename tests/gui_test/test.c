@@ -218,6 +218,10 @@ int main(void)
 	uint32_t vfo_b_tx_f = conf->channels.vfo_1.tx_freq;
 	uint16_t rf_rate = conf->frontend.rf_sample_rate;
 	float freq_corr = conf->settings.rf.freq_corr;
+	uint8_t lna_gain = conf->frontend.lna_gain;
+	uint8_t pga_gain = conf->frontend.pga_gain;
+	int8_t dac_gain = conf->frontend.dac_gain;
+	float mix_gain = conf->frontend.mix_gain;
 
 	// settings printout
 	if (1)
@@ -233,6 +237,10 @@ int main(void)
 		fprintf(stderr, "    IQ balance  %+.4f\n", conf->settings.rf.iq_bal);
 		fprintf(stderr, "      IQ angle  %+.1f deg.\n", conf->settings.rf.iq_theta);
 		fprintf(stderr, "RF sample rate  %d kHz\n", rf_rate);
+		fprintf(stderr, "      LNA gain  %d dB\n", lna_gain);
+		fprintf(stderr, "      PGA gain  %d dB\n", pga_gain);
+		fprintf(stderr, "      DAC gain  %d dB\n", dac_gain);
+		fprintf(stderr, "    Mixer gain  %.1f dB\n", mix_gain);		
 		fprintf(stderr, "----------------------------\n");
 	}
 
@@ -256,10 +264,10 @@ int main(void)
 		sx1255_set_rate(SX1255_RATE_125K);
 	sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 	sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
-	sx1255_set_lna_gain(20);
-	sx1255_set_pga_gain(24);
-	sx1255_set_dac_gain(0);
-	sx1255_set_mixer_gain(-13.5);
+	sx1255_set_lna_gain(lna_gain);
+	sx1255_set_pga_gain(pga_gain);
+	sx1255_set_dac_gain(dac_gain);
+	sx1255_set_mixer_gain(mix_gain);
 	sx1255_enable_rx(true);
 	sx1255_enable_tx(true);
 	sx1255_pa_enable(false);
