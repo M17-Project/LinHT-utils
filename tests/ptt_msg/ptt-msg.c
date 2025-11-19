@@ -184,7 +184,8 @@ int main(int argc, char *argv[])
     }
 
     // cleanup - TODO: move it elsewhere
-    zmq_disconnect(zmq_pub, zmq_ipc);
+    zmq_unbind(zmq_pub, zmq_ipc);
     zmq_ctx_destroy(&zmq_ctx);
     kbd_cleanup(kbd);
 }
+
