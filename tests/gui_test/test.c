@@ -341,14 +341,13 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: bug - this is PTT release event
-					sx1255_enable_rx(true);
-					sx1255_pa_enable(false);
-					linht_ctrl_tx_rx_switch_set(true);
-					linht_ctrl_red_led_set(false);
-					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
-					vfo_a_tx = false;
-					fprintf(stderr, "PTT released\n");
+					sx1255_enable_rx(false);
+					sx1255_pa_enable(true);
+					linht_ctrl_tx_rx_switch_set(false);
+					linht_ctrl_red_led_set(true);
+					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
+					vfo_a_tx = true;
+					fprintf(stderr, "PTT pressed\n");
 				}
 				else if (ev.code == KEY_UP)
 				{
@@ -384,14 +383,13 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					//TODO: bug - this is PTT press event
-					sx1255_enable_rx(false);
-					sx1255_pa_enable(true);
-					linht_ctrl_tx_rx_switch_set(false);
-					linht_ctrl_red_led_set(true);
-					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
-					vfo_a_tx = true;
-					fprintf(stderr, "PTT pressed\n");
+					sx1255_enable_rx(true);
+					sx1255_pa_enable(false);
+					linht_ctrl_tx_rx_switch_set(true);
+					linht_ctrl_red_led_set(false);
+					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
+					vfo_a_tx = false;
+					fprintf(stderr, "PTT released\n");
 				}
 				else if (ev.code == KEY_ESC)
 				{
@@ -540,3 +538,4 @@ int main(void)
 
 	return 0;
 }
+
