@@ -1,6 +1,6 @@
 #!/bin/bash
 
-b=100 #log base
+b=5000 #log base
 
 while true
 do
