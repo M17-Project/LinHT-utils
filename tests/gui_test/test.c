@@ -396,11 +396,15 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
+					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
+					// we assume VFO A is being used
+					// this is blocking - might be bad :)
+					usleep(vfo_a_tx_sust*1000);
+					
 					sx1255_enable_rx(true);
 					sx1255_pa_enable(false);
 					linht_ctrl_tx_rx_switch_set(true);
 					linht_ctrl_red_led_set(false);
-					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
 					vfo_a_tx = false;
 					fprintf(stderr, "PTT released\n");
 				}
