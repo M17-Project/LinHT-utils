@@ -216,6 +216,8 @@ int main(void)
 	uint32_t vfo_a_tx_f = conf->channels.vfo_0.tx_freq;
 	uint32_t vfo_b_rx_f = conf->channels.vfo_1.rx_freq;
 	uint32_t vfo_b_tx_f = conf->channels.vfo_1.tx_freq;
+	uint16_t vfo_a_tx_sust = conf->channels.vfo_0.tx_sust;
+	uint16_t vfo_b_tx_sust = conf->channels.vfo_1.tx_sust;
 	uint16_t rf_rate = conf->frontend.rf_sample_rate;
 	float freq_corr = conf->settings.rf.freq_corr;
 	uint8_t lna_gain = conf->frontend.lna_gain;
@@ -227,21 +229,23 @@ int main(void)
 	if (1)
 	{
 		fprintf(stderr, "Loaded settings:\n");
-		fprintf(stderr, "      VCO A RX  %d Hz\n", vfo_a_rx_f);
-		fprintf(stderr, "            TX  %d Hz\n", vfo_a_tx_f);
-		fprintf(stderr, "      VCO B RX  %d Hz\n", vfo_b_rx_f);
-		fprintf(stderr, "            TX  %d Hz\n", vfo_b_tx_f);
-		fprintf(stderr, "   Freq. corr.  %+.3f ppm\n", freq_corr);
-		fprintf(stderr, "   I DC offset  %+.3f\n", conf->settings.rf.i_dc);
-		fprintf(stderr, "   Q DC offset  %+.3f\n", conf->settings.rf.q_dc);
-		fprintf(stderr, "    IQ balance  %+.4f\n", conf->settings.rf.iq_bal);
-		fprintf(stderr, "      IQ angle  %+.1f deg.\n", conf->settings.rf.iq_theta);
-		fprintf(stderr, "RF sample rate  %d kHz\n", rf_rate);
-		fprintf(stderr, "      LNA gain  %d dB\n", lna_gain);
-		fprintf(stderr, "      PGA gain  %d dB\n", pga_gain);
-		fprintf(stderr, "      DAC gain  %d dB\n", dac_gain);
-		fprintf(stderr, "    Mixer gain  %.1f dB\n", mix_gain);		
-		fprintf(stderr, "----------------------------\n");
+		fprintf(stderr, "       VFO A RX  %d Hz\n", vfo_a_rx_f);
+		fprintf(stderr, "             TX  %d Hz\n", vfo_a_tx_f);
+		fprintf(stderr, "       VFO B RX  %d Hz\n", vfo_b_rx_f);
+		fprintf(stderr, "             TX  %d Hz\n", vfo_b_tx_f);
+		fprintf(stderr, "    Freq. corr.  %+.3f ppm\n", freq_corr);
+		fprintf(stderr, "    I DC offset  %+.3f\n", conf->settings.rf.i_dc);
+		fprintf(stderr, "    Q DC offset  %+.3f\n", conf->settings.rf.q_dc);
+		fprintf(stderr, "     IQ balance  %+.4f\n", conf->settings.rf.iq_bal);
+		fprintf(stderr, "       IQ angle  %+.1f deg.\n", conf->settings.rf.iq_theta);
+		fprintf(stderr, " RF sample rate  %d kHz\n", rf_rate);
+		fprintf(stderr, "       LNA gain  %d dB\n", lna_gain);
+		fprintf(stderr, "       PGA gain  %d dB\n", pga_gain);
+		fprintf(stderr, "       DAC gain  %d dB\n", dac_gain);
+		fprintf(stderr, "     Mixer gain  %.1f dB\n", mix_gain);
+		fprintf(stderr, " VFO A TX sust.  %d ms\n", vfo_a_tx_sust);
+		fprintf(stderr, " VFO B TX sust.  %d ms\n", vfo_b_tx_sust);
+		fprintf(stderr, "-----------------------------\n");
 	}
 
 	// LEDs
@@ -292,6 +296,15 @@ int main(void)
 
 	pmt_len = string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
+	
+	// config TX sustain time
+	// this should be done per VFO
+	// but we assume we use only VFO A
+	char sust_time[16] = {0};
+	uint8_t sust_pmt[24] = {0};
+	sprintf(sust_time, "SUST%d", vfo_a_tx_sust);
+	uint8_t sust_pmt_len = string_to_pmt(sust_pmt, sust_time);
+	zmq_send(zmq_pub, sust_pmt, sust_pmt_len, 0);
 
 	// init Raylib
 	fprintf(stderr, "Initializing Raylib...\n");

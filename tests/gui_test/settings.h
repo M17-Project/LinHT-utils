@@ -64,6 +64,7 @@ typedef struct
     uint32_t tx_freq;
     uint32_t rx_freq;
     float bw;
+	uint16_t tx_sust;
     channel_extra_t extra;
 } channel_t;
 
@@ -154,6 +155,7 @@ cyaml_schema_field_t channel_fields[] =
 	CYAML_FIELD_UINT("tx_freq", CYAML_FLAG_DEFAULT, channel_t, tx_freq),
 	CYAML_FIELD_UINT("rx_freq", CYAML_FLAG_DEFAULT, channel_t, rx_freq),
 	CYAML_FIELD_FLOAT("bw", CYAML_FLAG_DEFAULT, channel_t, bw),
+	CYAML_FIELD_UINT("tx_sust", CYAML_FLAG_DEFAULT, channel_t, tx_sust),
 	CYAML_FIELD_MAPPING("extra", CYAML_FLAG_DEFAULT, channel_t, extra, channel_extra_fields),
 	CYAML_FIELD_END
 };
