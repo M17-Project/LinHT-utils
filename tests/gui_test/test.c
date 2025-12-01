@@ -63,6 +63,10 @@ uint16_t cnt;
 // keyboard
 const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
+uint16_t last_pressed[12];
+const uint16_t key_seq_1[11] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
+								KEY_LEFT, KEY_RIGHT, KEY_LEFT, KEY_RIGHT,
+								KEY_ENTER, KEY_ESC, KEY_2};
 
 // ZeroMQ and PMT
 const char *zmq_ipc = "ipc:///tmp/ptt_msg";
@@ -348,7 +352,7 @@ int main(void)
 
 		ssize_t n = read(kbd, &ev, sizeof(ev)); // non-blocking
 
-		if (n == (ssize_t)sizeof(ev))
+		if (n==(ssize_t)sizeof(ev) && ev.type==EV_KEY)
 		{
 			if (ev.value == KEY_PRESS)
 			{
@@ -390,6 +394,19 @@ int main(void)
 				else
 				{
 					;
+				}
+
+				// remember last pressed keys
+				for (uint8_t i=0; i<11; i++)
+					last_pressed[i] = last_pressed[i+1];
+				last_pressed[11] = ev.code;
+
+				// check against a secret combination :)
+				if (memcmp((uint8_t*)&last_pressed[12-11], (uint8_t*)key_seq_1, sizeof(key_seq_1)) == 0)
+				{
+					fprintf(stderr, "Shutting down now.\n");
+					system("shutdown now");
+					return 0;
 				}
 			}
 			else // KEY_RELEASE
@@ -548,10 +565,6 @@ int main(void)
 	CloseWindow();
 	
 	fprintf(stderr, "Cleanup done. Exiting.\n");
-	
-	// device shutdown
-	// TODO: fix it
-	// system("shutdown now");
 
 	return 0;
 }
