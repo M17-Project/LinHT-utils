@@ -85,6 +85,18 @@ bool esc_pressed = false;
 // spawning flowgraphs (python)
 pid_t fg_pid;
 
+// misc
+uint8_t redraw_req = 1;
+Color bkg_color = BLACK;
+Color top_bar_color = {0x20, 0x20, 0x20, 0xFF};
+Color line_color = {0x60, 0x60, 0x60, 0xFF};
+time_t t;
+struct tm *time_info;
+char time_s[10], time_s_last[10];
+uint8_t gnss_display = 1, gnss_display_last;
+char bv[8], bv_last[8];
+Color bv_col = WHITE;
+
 void load_gfx(void)
 {
 	Image img;
@@ -310,8 +322,8 @@ int main(void)
 	// load images
 	load_gfx();
 
-	// set low FPS for embedded display
-	SetTargetFPS(5);
+	// set FPS
+	SetTargetFPS(15);
 
 	//execute FG, TODO: the parameters are only OK for M17 FG
 	char *fg_path = conf->channels.vfo_0.fg;
@@ -349,19 +361,20 @@ int main(void)
     	exit(EXIT_FAILURE);
 	}
 	
-	// get time
-	esc_start = time(NULL);
-	
 	// ready!
 	fprintf(stderr, "Ready! Awaiting commands...\n");
+
+	// get time
+	esc_start = time(NULL);
 
 	// main loop
 	while (!WindowShouldClose())
 	{
+		// poll for terminal events even if no redrawing is required
+		PollInputEvents();
+
 		struct input_event ev;
-
 		ssize_t n = read(kbd, &ev, sizeof(ev)); // non-blocking
-
 		if (n==(ssize_t)sizeof(ev) && ev.type==EV_KEY)
 		{
 			if (ev.value == KEY_PRESS)
@@ -375,18 +388,21 @@ int main(void)
 					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
 					vfo_a_tx = true;
 					fprintf(stderr, "PTT pressed\n");
+					redraw_req = 1;
 				}
 				else if (ev.code == KEY_UP)
 				{
 					vfo_a_rx_f += 12500; vfo_a_tx_f += 12500; 
 					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
+					redraw_req = 1;
 				}
 				else if (ev.code == KEY_DOWN)
 				{
 					vfo_a_rx_f -= 12500; vfo_a_tx_f -= 12500;
 					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
+					redraw_req = 1;
 				}
 				else if (ev.code == KEY_LEFT)
 				{
@@ -434,6 +450,7 @@ int main(void)
 					linht_ctrl_red_led_set(false);
 					vfo_a_tx = false;
 					fprintf(stderr, "PTT released\n");
+					redraw_req = 1;
 				}
 				else if (ev.code == KEY_ESC)
 				{
@@ -447,36 +464,25 @@ int main(void)
 		}
 		
 		// check if ESC button has been pressed for at least 5 seconds
-		if (time(NULL) - esc_start >= 5 && esc_pressed)
+		if (esc_pressed && time(NULL) - esc_start >= 5)
 			break;
 
-		BeginDrawing();
-
-		// clear screen
-		ClearBackground(BLACK);
-
-		// draw the wallpaper
-		DrawTexture(texture[IMG_WALLPAPER], 0, 0, WHITE);
-
-		// draw header
-		DrawRectangle(0, 0, RES_X, 17, (Color){0x20, 0x20, 0x20, 0xFF});
-		DrawLine(0, 17, RES_X - 1, 17, (Color){0x60, 0x60, 0x60, 0xFF});
-
-		// time
-		time_t t = time(NULL);
-		struct tm *time_info = localtime(&t);
-		char time_s[10];
-		snprintf(time_s, sizeof(time_s), "%02d:%02d", time_info->tm_hour, time_info->tm_min);
-		DrawTextEx(customFont, time_s, (Vector2){2.0f, 2.0f}, 14.0f, 0, WHITE);
-
 		//'gnss' icon
-		DrawTexture(texture[IMG_GNSS], RES_X - 40, 1, WHITE);
-
-		// battery voltage display
-		static char bv[8] = {0};
-		static Color bv_col = WHITE;
-		if (cnt % 5 == 0)
+		if (gnss_display==1 && gnss_display_last==0)
 		{
+			gnss_display_last = 1;
+			redraw_req = 1;
+		}
+		else if (gnss_display==0 && gnss_display_last==1)
+		{
+			gnss_display_last = 0;
+			redraw_req = 1;
+		}
+
+		// not so frequent checks - current time and battery voltage
+		if (cnt % 200 == 0)
+		{
+			// battery voltage display
 			FILE *fp = fopen("/sys/bus/iio/devices/iio:device0/in_voltage1_raw", "r");
 			int value;
 			uint16_t batt_mv = 0;
@@ -507,59 +513,99 @@ int main(void)
 				bv_col = ORANGE;
 			else
 				bv_col = RED;
+
+			if (strcmp(bv, bv_last))
+			{
+				strcpy(bv_last, bv);
+				redraw_req = 1;
+			}
+
+			// time display
+			t = time(NULL);
+			time_info = localtime(&t);
+			snprintf(time_s, sizeof(time_s), "%02d:%02d", time_info->tm_hour, time_info->tm_min);
+			if (strcmp(time_s, time_s_last))
+			{
+				strcpy(time_s_last, time_s);
+				redraw_req = 1;
+			}
 		}
 
-		// battery voltage - icon or text
-		// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
-		DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
+		if (redraw_req)
+		{
+			BeginDrawing();
 
-		// VFO A
-		DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
-		DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
-		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
-		char freq_a_str[10];
-		uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
-		snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a%1000000) / 1000);
-		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
-		snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
-		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
-		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
-		DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
-		DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
-		// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
+			// clear screen
+			ClearBackground(bkg_color);
 
-		// horizontal separating bar
-		DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
+			// draw the wallpaper
+			//DrawTexture(texture[IMG_WALLPAPER], 0, 0, WHITE);
 
-		// VFO B
-		DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
-		DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
-		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
-		char freq_b_str[10];
-		uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
-		snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b%1000000) / 1000);
-		DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
-		snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
-		DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
-		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
-		DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
-		DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
+			// draw header
+			DrawRectangle(0, 0, RES_X, 17, top_bar_color);
+			DrawLine(0, 17, RES_X - 1, 17, line_color);
 
-		// test
-		// Rectangle src = {0, 0, (float)texture.width, (float)texture.height};
-		// Rectangle dst = {0, 0, RES_X, RES_Y};
-		// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+			// top to bottom, left to right (more or less)
+			DrawTextEx(customFont, time_s, (Vector2){2, 2}, 14, 0, WHITE);
 
-		EndDrawing();
+			// GNSS
+			if (gnss_display)
+				DrawTexture(texture[IMG_GNSS], RES_X - 40, 1, WHITE);
+
+			// battery voltage - icon or text
+			// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
+			DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
+
+			// VFO A
+			DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
+			DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
+			DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
+			char freq_a_str[10];
+			uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
+			snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a%1000000) / 1000);
+			DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
+			snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
+			DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
+			DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
+			DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
+			DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
+			// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
+
+			// horizontal separating bar
+			DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
+
+			// VFO B
+			DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
+			DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
+			DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
+			char freq_b_str[10];
+			uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
+			snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b%1000000) / 1000);
+			DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
+			snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
+			DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
+			DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
+			DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
+			DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
+
+			// test
+			// Rectangle src = {0, 0, (float)texture.width, (float)texture.height};
+			// Rectangle dst = {0, 0, RES_X, RES_Y};
+			// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+
+			EndDrawing();
+
+			redraw_req = 0;
+		}
 
 		// frame counter
 		cnt++;
-		cnt %= 60 * 5;
+		cnt %= 5 * 200;
 		
 		// reduce CPU congestion
 		usleep(5e3);
