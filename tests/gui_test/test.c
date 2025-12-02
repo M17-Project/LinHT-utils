@@ -81,41 +81,8 @@ bool vfo_b_tx = false;
 time_t esc_start;
 bool esc_pressed = false;
 
-// framebuffer init
-int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
-{
-	*fhandle = open("/dev/fb0", O_RDWR);
-	if (*fhandle < 0)
-	{
-		perror("open");
-		return 1;
-	}
-
-	struct fb_var_screeninfo vinfo;
-	struct fb_fix_screeninfo finfo;
-
-	if (ioctl(*fhandle, FBIOGET_FSCREENINFO, &finfo) < 0)
-	{
-		perror("finfo");
-		return 1;
-	}
-
-	if (ioctl(*fhandle, FBIOGET_VSCREENINFO, &vinfo) < 0)
-	{
-		perror("vinfo");
-		return 1;
-	}
-
-	*ssize = finfo.line_length * vinfo.yres;
-	*buffer = (uint32_t *)mmap(0, *ssize, PROT_READ | PROT_WRITE, MAP_SHARED, *fhandle, 0);
-	if (*buffer == MAP_FAILED)
-	{
-		perror("mmap");
-		return 1;
-	}
-
-	return 0;
-}
+// spawning flowgraphs (python)
+pid_t fg_pid;
 
 void fb_cleanup(uint32_t *buffer, size_t ssize, int fhandle)
 {
@@ -130,27 +97,31 @@ void load_gfx(void)
 	img = LoadImage(IMG_PATH "/wallpaper.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_WALLPAPER] = LoadTextureFromImage(img);
+	UnloadImage(img);
 
 	img = LoadImage(IMG_PATH "/mute.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_MUTE] = LoadTextureFromImage(img);
+	UnloadImage(img);
 
 	img = LoadImage(IMG_PATH "/gnss.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_GNSS] = LoadTextureFromImage(img);
+	UnloadImage(img);
 
 	img = LoadImage(IMG_PATH "/batt_100.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_BATT_100] = LoadTextureFromImage(img);
+	UnloadImage(img);
 
 	img = LoadImage(IMG_PATH "/vfo_act.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_VFO_ACT] = LoadTextureFromImage(img);
+	UnloadImage(img);
 
 	img = LoadImage(IMG_PATH "/vfo_inact.png");
 	ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 	texture[IMG_VFO_INACT] = LoadTextureFromImage(img);
-
 	UnloadImage(img);
 }
 
@@ -306,7 +277,7 @@ int main(void)
 	// but we assume we use only VFO A
 	char sust_time[16] = {0};
 	uint8_t sust_pmt[24] = {0};
-	sprintf(sust_time, "SUST%d", vfo_a_tx_sust);
+	snprintf(sust_time, sizeof(sust_time), "SUST%d", vfo_a_tx_sust);
 	uint8_t sust_pmt_len = string_to_pmt(sust_pmt, sust_time);
 	zmq_send(zmq_pub, sust_pmt, sust_pmt_len, 0);
 
@@ -330,14 +301,21 @@ int main(void)
 	char *fg_path = conf->channels.vfo_0.fg;
 	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
 	char fg_str[256];
-	sprintf(fg_str, "python %s -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
+	snprintf(fg_str, sizeof(fg_str), "python %s -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
 		fg_path,
 		conf->settings.rf.i_dc,
 		conf->settings.rf.q_dc,
 		conf->channels.vfo_0.extra.src,
 		conf->channels.vfo_0.extra.dst,
 		conf->channels.vfo_0.extra.can );
-	system(fg_str);
+	fg_pid = fork();
+	if (fg_pid == 0)
+	{
+		execl("/bin/sh", "sh", "-c", fg_str, (char*)NULL);
+		// if execl fails
+    	fprintf(stderr, "Failed to execute GNU Radio flowgraph\n");
+    	exit(EXIT_FAILURE);
+	}
 	
 	// get time
 	esc_start = time(NULL);
@@ -456,7 +434,7 @@ int main(void)
 		time_t t = time(NULL);
 		struct tm *time_info = localtime(&t);
 		char time_s[10];
-		sprintf(time_s, "%02d:%02d", time_info->tm_hour, time_info->tm_min);
+		snprintf(time_s, sizeof(time_s), "%02d:%02d", time_info->tm_hour, time_info->tm_min);
 		DrawTextEx(customFont, time_s, (Vector2){2.0f, 2.0f}, 14.0f, 0, WHITE);
 
 		//'gnss' icon
@@ -468,25 +446,28 @@ int main(void)
 		if (cnt % 5 == 0)
 		{
 			FILE *fp = fopen("/sys/bus/iio/devices/iio:device0/in_voltage1_raw", "r");
+			int value;
+			uint16_t batt_mv = 0;
 
 			if (!fp)
 			{
 				fprintf(stderr, "Failed to open IIO sysfs entry\n");
-				return -1;
 			}
-
-			int value;
-			if (fscanf(fp, "%d", &value) != 1)
+			else
 			{
-				fprintf(stderr, "Failed to read battery voltage\n");
+				if (fscanf(fp, "%d", &value) == 1)
+				{
+					batt_mv = (uint16_t)(value / 4096.0 * 1.8 * (39.0 + 10.0) / 10.0 * 1000.0);
+					snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv%1000) / 100);
+				}
+				else
+				{
+					snprintf(bv, sizeof(bv), "?.?");
+					fprintf(stderr, "Failed to read battery voltage\n");
+				}
+
 				fclose(fp);
-				return -1;
 			}
-
-			fclose(fp);
-
-			uint16_t batt_mv = (uint16_t)(value / 4096.0 * 1.8 * (39.0 + 10.0) / 10.0 * 1000.0);
-			sprintf(bv, "%d.%d", batt_mv / 1000, (batt_mv - (batt_mv / 1000) * 1000) / 100);
 
 			if (batt_mv >= 7400)
 				bv_col = WHITE;
@@ -506,9 +487,9 @@ int main(void)
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 		char freq_a_str[10];
 		uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
-		sprintf(freq_a_str, "%d.%03d", freq_a / 1000000, (freq_a - (freq_a / 1000000) * 1000000) / 1000);
+		snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a%1000000) / 1000);
 		DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
-		sprintf(freq_a_str, "%02d", (freq_a % 1000) / 10);
+		snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
 		DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
@@ -527,9 +508,9 @@ int main(void)
 		DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
 		char freq_b_str[10];
 		uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
-		sprintf(freq_b_str, "%d.%03d", freq_b / 1000000, (freq_b - (freq_b / 1000000) * 1000000) / 1000);
+		snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b%1000000) / 1000);
 		DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
-		sprintf(freq_b_str, "%02d", (freq_b % 1000) / 10);
+		snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
 		DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
 		DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
 		DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
@@ -559,9 +540,9 @@ int main(void)
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
 	zmq_unbind(zmq_pub, zmq_ipc);
-	zmq_ctx_destroy(&zmq_ctx);
+	zmq_ctx_destroy(zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
-	system("kill -TERM `pidof python`"); // kill FG
+	kill(fg_pid, SIGTERM); // kill FG
 	CloseWindow();
 	
 	fprintf(stderr, "Cleanup done. Exiting.\n");
