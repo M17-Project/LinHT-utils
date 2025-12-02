@@ -8,6 +8,7 @@
 #include <math.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <linux/fb.h>
 #include <time.h>
 #include <raylib.h>
@@ -84,12 +85,6 @@ bool esc_pressed = false;
 // spawning flowgraphs (python)
 pid_t fg_pid;
 
-void fb_cleanup(uint32_t *buffer, size_t ssize, int fhandle)
-{
-	munmap(buffer, ssize);
-	close(fhandle);
-}
-
 void load_gfx(void)
 {
 	Image img;
@@ -124,6 +119,26 @@ void load_gfx(void)
 	texture[IMG_VFO_INACT] = LoadTextureFromImage(img);
 	UnloadImage(img);
 }
+
+/*Texture2D RenderTextToTexture(const char *text, Font font, int fontSize, Color color)
+{
+    Vector2 size = MeasureTextEx(font, text, fontSize, 0);
+    Image img = GenImageColor(size.x, size.y, BLANK);
+
+    ImageDrawTextEx(
+        &img,
+        font,
+        text,
+        (Vector2){0, 0},
+        fontSize,
+        0,
+        color
+    );
+
+    Texture2D tex = LoadTextureFromImage(img);
+    UnloadImage(img);
+    return tex;
+}*/
 
 int kbd_init(int *fhandle, const char *path)
 {
@@ -286,6 +301,7 @@ int main(void)
 	if (!raylib_debug)
 		SetTraceLogLevel(LOG_NONE);
 	InitWindow(RES_X, RES_Y, "GUI test");
+	SetWindowState(FLAG_VSYNC_HINT);
 
 	Font customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
 	Font customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
@@ -300,19 +316,35 @@ int main(void)
 	//execute FG, TODO: the parameters are only OK for M17 FG
 	char *fg_path = conf->channels.vfo_0.fg;
 	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
-	char fg_str[256];
-	snprintf(fg_str, sizeof(fg_str), "python %s -o \"%.4f+%.4fj\" -S \"%s\" -D \"%s\" -C %d &> /dev/null &",
-		fg_path,
-		conf->settings.rf.i_dc,
-		conf->settings.rf.q_dc,
-		conf->channels.vfo_0.extra.src,
-		conf->channels.vfo_0.extra.dst,
-		conf->channels.vfo_0.extra.can );
+
+	char offs_str[24], can_str[4];
+	snprintf(offs_str, sizeof(offs_str), "%.4f+%.4fj", conf->settings.rf.i_dc, conf->settings.rf.q_dc);
+	snprintf(can_str, sizeof(can_str), "%d", conf->channels.vfo_0.extra.can);
+
 	fg_pid = fork();
 	if (fg_pid == 0)
 	{
-		execl("/bin/sh", "sh", "-c", fg_str, (char*)NULL);
-		// if execl fails
+		// child process
+		// open /dev/null
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull < 0)
+			exit(EXIT_FAILURE);
+
+		// redirect both stdout and stderr to /dev/null
+		dup2(devnull, STDOUT_FILENO);
+		dup2(devnull, STDERR_FILENO);
+
+    	close(devnull);   // close /dev/null
+
+		execlp("python", "python",
+           fg_path,
+           "-o", offs_str,
+           "-S", conf->channels.vfo_0.extra.src,
+           "-D", conf->channels.vfo_0.extra.dst,
+           "-C", can_str,
+           (char*)NULL);
+
+		// if execp fails
     	fprintf(stderr, "Failed to execute GNU Radio flowgraph\n");
     	exit(EXIT_FAILURE);
 	}
@@ -528,9 +560,12 @@ int main(void)
 		// frame counter
 		cnt++;
 		cnt %= 60 * 5;
+		
+		// reduce CPU congestion
+		usleep(5e3);
 	}
 
-	// Cleanup
+	// cleanup
 	fprintf(stderr, "Exit code caught. Cleaning up...\n");
 	for (uint8_t i=0; i<IMG_COUNT; i++)
 		UnloadTexture(texture[i]);
@@ -539,12 +574,13 @@ int main(void)
 	UnloadFont(customFont12);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
+	kill(fg_pid, SIGTERM); // kill FG
+	waitpid(fg_pid, NULL, 0);
 	zmq_unbind(zmq_pub, zmq_ipc);
+	zmq_close(zmq_pub);
 	zmq_ctx_destroy(zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
-	kill(fg_pid, SIGTERM); // kill FG
 	CloseWindow();
-	
 	fprintf(stderr, "Cleanup done. Exiting.\n");
 
 	return 0;
