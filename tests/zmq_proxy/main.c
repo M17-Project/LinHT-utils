@@ -6,6 +6,7 @@
 #include <alsa/asoundlib.h>
 
 #define ZMQ_LEN 2048
+#define BYTES_PER_PERIOD (ZMQ_LEN * sizeof(int32_t)) // for ALSA
 #define BSB_RX_DEV "hw:SX1255"
 #define BSB_TX_DEV "hw:SX1255,1"
 #define RX_IPC  "/tmp/bsb_rx"
@@ -27,7 +28,7 @@ void *zmq_ptt_sub;
 uint8_t sot_pmt[10], eot_pmt[10];
 
 struct timeval tv_start, tv_now;
-int64_t t_sust = 4*40000;	//default sustain time in microseconds (4 M17 frames)
+int64_t t_sust = 4*40e3;	//default sustain time in microseconds (4 M17 frames)
 
 typedef enum
 {
@@ -173,98 +174,143 @@ int main(void)
 	
 	string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
-	
+		
 	fprintf(stderr, "Running...\n");
-	
+
+	zmq_pollitem_t zitems[] =
+	{
+		{ zmq_ptt_sub, 0, ZMQ_POLLIN, 0 },
+		{ zmq_sub,     0, ZMQ_POLLIN, 0 },
+	};
+
 	while (1)
 	{
-		int r = zmq_recv(zmq_ptt_sub, (uint8_t*)pmt_buff, sizeof(pmt_buff), ZMQ_DONTWAIT);
-		if (r > 0)
+		// handle PTT + TX baseband readiness (non-blocking)
+		zmq_poll(zitems, 2, 0);   // no wait, just update revents
+
+		if (zitems[0].revents & ZMQ_POLLIN)
 		{
-			// "SOT"
+			zmq_recv(zmq_ptt_sub, (uint8_t*)pmt_buff, sizeof(pmt_buff), ZMQ_DONTWAIT);
+
 			if (memcmp(pmt_buff, sot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT pressed\n");
 				rx_stop_cleanup();
 			}
-			
-			// "EOT"
 			else if (memcmp(pmt_buff, eot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT released\n");
 				gettimeofday(&tv_start, NULL);
 			}
-			
-			// "SUST%d" TODO: add length check
 			else if (strncmp((char*)&pmt_buff[3], "SUST", 4) == 0)
 			{
 				int32_t val = atoi((char*)&pmt_buff[7]);
-				t_sust = (int64_t)val*1000;
+				t_sust = (int64_t)val * 1000;
 				fprintf(stderr, "Setting sustain time to %d ms\n", val);
 			}
-			
-			// unrecognized PMT message
 			else
+			{
 				fprintf(stderr, "Unrecognized PMT message\n");
+			}
 		}
-		
-		// RX
+
+		// RX state
 		if (radio_state == STATE_RX)
 		{
+			// wait for RX device to be ready, up to 100 ms
+			int w = snd_pcm_wait(bsb_rx, 100);
+			if (w < 0)
+			{
+				snd_pcm_recover(bsb_rx, w, 1);
+				continue;
+			}
+
 			snd_pcm_sframes_t n = snd_pcm_readi(bsb_rx, rx_buff, ZMQ_LEN/2);
 
 			if (n == -EPIPE)
 			{
-				// overrun
 				snd_pcm_recover(bsb_rx, n, 1);
 				continue;
 			}
 			else if (n < 0)
 			{
-				// other error
 				snd_pcm_recover(bsb_rx, n, 1);
 				continue;
 			}
 			else if ((uint32_t)n < ZMQ_LEN/2)
 			{
-				// short read — continue
+				// short read - ignore
 				continue;
 			}
-			
-			zmq_send(zmq_pub, (uint8_t*)rx_buff, ZMQ_LEN*sizeof(*rx_buff), ZMQ_DONTWAIT);
+
+			zmq_send(zmq_pub, (uint8_t*)rx_buff,
+					 ZMQ_LEN * sizeof(*rx_buff),
+					 ZMQ_DONTWAIT);
 		}
-		
-		// TX
+
+		// TX state
 		else if (radio_state == STATE_TX)
 		{
-			int r = zmq_recv(zmq_sub, (uint8_t*)tx_buff, sizeof(tx_buff), ZMQ_DONTWAIT);
-			if (r > 0)
+			// new baseband from UDP/ZMQ side?
+			if (zitems[1].revents & ZMQ_POLLIN)
 			{
-				uint8_t pos = 0;
-				do
+				int r = zmq_recv(zmq_sub, (uint8_t*)tx_buff, sizeof(tx_buff), 0); // blocking is fine here
+
+				if (r > 0)
 				{
-					snd_pcm_sframes_t written;
-					do
+					// optional: sanity-check packet size
+					/*if (r % BYTES_PER_PERIOD != 0)
 					{
-						written = snd_pcm_writei(bsb_tx, &tx_buff[ZMQ_LEN*pos], ZMQ_LEN/2);
-						if (written < 0)
-							written = snd_pcm_recover(bsb_tx, written, 1);
+						fprintf(stderr, "TX: unexpected packet size %d bytes (not multiple of %d)\n",
+								r, (int)BYTES_PER_PERIOD);
+					}*/
+
+					int bytes_left = r;
+					uint8_t *p = (uint8_t*)tx_buff;
+
+					// write all full periods contained in this ZMQ message
+					while (bytes_left >= (int)BYTES_PER_PERIOD && radio_state == STATE_TX)
+					{
+						snd_pcm_sframes_t written;
+
+						do
+						{
+							written = snd_pcm_writei(
+								bsb_tx,
+								(int32_t*)p,      // start of this period
+								ZMQ_LEN / 2       // frames per period
+							);
+
+							if (written == -EPIPE)
+							{
+								// underrun
+								snd_pcm_recover(bsb_tx, written, 1);
+							}
+							else if (written < 0)
+							{
+								// other error
+								snd_pcm_recover(bsb_tx, written, 1);
+							}
+						}
+						while (written < 0 && radio_state == STATE_TX);
+
+						// ALSA should either block until this period is played,
+						// or recover and retry, so when we get here this period is "consumed".
+						p          += BYTES_PER_PERIOD;
+						bytes_left -= BYTES_PER_PERIOD;
 					}
-					while (written < 0);
-					
-					r -= ZMQ_LEN*4;
-					pos++;
-				} 
-				while (r > 0);
+
+					// any leftover bytes (less than one full period) are ignored for now;
+					// if you ever see 'r' not equal to BYTES_PER_PERIOD, fix the sender.
+				}
 			}
-			
+
 			// check if the "tx sustain" time has elapsed
 			if (tv_start.tv_sec != 0)
 			{
 				gettimeofday(&tv_now, NULL);
 				if (time_diff_us(tv_now, tv_start) >= t_sust)
 				{
-					// call the TX stop&cleanup function
 					tx_stop_cleanup();
 					fprintf(stderr, " TX sustain time elapsed\n");
 					tv_start.tv_sec = 0;
