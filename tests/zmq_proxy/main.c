@@ -251,6 +251,8 @@ int main(void)
 		// TX state
 		else if (radio_state == STATE_TX)
 		{
+			zmq_poll(zitems, 2, 10);   // Repoll but this time blocking to prevent busy loop
+
 			// new baseband from UDP/ZMQ side?
 			if (zitems[1].revents & ZMQ_POLLIN)
 			{
