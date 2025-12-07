@@ -6,6 +6,7 @@
 
 #include <zmq.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -66,7 +67,7 @@ public:
         return 0;                                // no TX support (yet)
     }
 
-    bool getFullDuplex(const int direction, const size_t /*channel*/) const
+    bool getFullDuplex(const int /*direction*/, const size_t /*channel*/) const
     {
         return false;
     }
@@ -79,6 +80,8 @@ public:
         {
             // Native format: complex float (I, Q)
             formats.push_back(SOAPY_SDR_CF32);
+            // rtl_433
+            formats.push_back(SOAPY_SDR_CS16);
         }
         return formats;
     }
@@ -227,9 +230,9 @@ public:
             throw std::runtime_error("LinHTZmq: only RX direction is supported");
         }
 
-        if (format != SOAPY_SDR_CF32)
+        if (format != SOAPY_SDR_CF32 && format != SOAPY_SDR_CS16)
         {
-            throw std::runtime_error("LinHT: supported format is CF32");
+            throw std::runtime_error("LinHT: supported formats are CF32 and CS16!");
         }
 
         if (!channels.empty() && (channels.size() != 1 || channels[0] != 0))
@@ -307,8 +310,6 @@ public:
             return SOAPY_SDR_STREAM_ERROR;
         }
 
-        auto *out = reinterpret_cast<std::complex<float> *>(buffs[0]);
-
         // Ensure FIFO has enough samples.
         while(st->fifo.size() < numElems)
         {
@@ -325,7 +326,17 @@ public:
                 (timeoutUs + 999) / 1000;
 
             int pollRet = zmq_poll(&item, 1, timeoutMs);
-            if(pollRet <= 0)
+            if(pollRet < 0)
+            {
+                if(zmq_errno() == EINTR)
+                {
+                    // Try again.
+                    continue;
+                }
+                return SOAPY_SDR_STREAM_ERROR;
+            }
+
+            if(pollRet == 0)
             {
                 return SOAPY_SDR_TIMEOUT;
             }
@@ -345,7 +356,7 @@ public:
             size_t nInts = rc / sizeof(int32_t);
             size_t nComplex = nInts / 2;
 
-            const float scale = 1.0f / 2147483648.0f;
+            const float scale = powf(2.0f, -31.0f);
             const float alpha = 1e-4f;
 
             for(size_t i = 0; i < nComplex; i++)
@@ -366,11 +377,39 @@ public:
             }
         }
 
-        // Output exactly numElems.
-        for(size_t i = 0; i < numElems; i++)
+        if(st->format == SOAPY_SDR_CF32)
         {
-            out[i] = st->fifo.front();
-            st->fifo.pop_front();
+            auto *out = reinterpret_cast<std::complex<float> *>(buffs[0]);
+
+            // Output exactly numElems.
+            for(size_t i = 0; i < numElems; i++)
+            {
+                out[i] = st->fifo.front();
+                st->fifo.pop_front();
+            }
+        }
+        else if(st->format == SOAPY_SDR_CS16) {
+            auto *out = reinterpret_cast<std::complex<int16_t> *>(buffs[0]);
+
+            // Output exactly numElems.
+            for(size_t i = 0; i < numElems; i++)
+            {
+                // Get CF32 sample from FIFO
+                const std::complex<float> s = st->fifo.front();
+                st->fifo.pop_front();
+
+                // Clamp to [-1.0, 1.0] to avoid overflow
+                // FIXME: is this needed?
+                float re = std::clamp(s.real(), -1.0f, 1.0f);
+                float im = std::clamp(s.imag(), -1.0f, 1.0f);
+
+                // Scale to int16_t range and round
+                int16_t ire = static_cast<int16_t>(std::lrint(re * 32767.0f));
+                int16_t iim = static_cast<int16_t>(std::lrint(im * 32767.0f));
+
+                // Store as CS16 (interleaved I/Q)
+                out[i] = std::complex<int16_t>(ire, iim);
+            }
         }
 
         flags = 0;
@@ -440,7 +479,8 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
     }
 
     std::cerr << "LinHTZmq: connected to " << endpoint
-              << " (CS32, 500 kSa/s, 433.475 MHz)\n";
+          << " (CF32, " << LINHT_SAMPLE_RATE/1000.0 << " kSa/s, "
+          << centerFreqHz/1e6 << " MHz)\n";
 }
 
 LinHTZmqDevice::~LinHTZmqDevice()

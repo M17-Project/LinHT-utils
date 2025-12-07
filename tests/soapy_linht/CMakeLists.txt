@@ -7,7 +7,7 @@ if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Build type not specified: defaulting to Release.")
 endif()
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ZMQ
