@@ -15,18 +15,32 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZMQ REQUIRED libzmq)
 
 # SoapySDR
-find_package(SoapySDR CONFIG)
-if(NOT SoapySDR_FOUND)
-    message(WARNING "SoapySDR development files not found - skipping LinHTSupport module")
-    return()
-endif()
+find_package(SoapySDR REQUIRED)
 
+include_directories(${SoapySDR_INCLUDE_DIRS})
 include_directories(${ZMQ_INCLUDE_DIRS})
 
-SOAPY_SDR_MODULE_UTIL(
-    TARGET LinHTSupport
-    SOURCES main.cpp fir.cpp
-    LIBRARIES ${ZMQ_LIBRARIES}
+find_library(SX1255_LIB sx1255 REQUIRED)
+
+message(STATUS "Using SX1255_LIB = ${SX1255_LIB}")
+message(STATUS "SoapySDR_LIBRARIES = ${SoapySDR_LIBRARIES}")
+
+add_library(LinHTSupport MODULE
+    main.cpp
+    fir.cpp
 )
 
 target_compile_options(LinHTSupport PRIVATE ${ZMQ_CFLAGS_OTHER})
+
+target_link_libraries(LinHTSupport
+    PRIVATE
+        ${SoapySDR_LIBRARIES}
+        ${ZMQ_LIBRARIES}
+        ${SX1255_LIB}
+        ${GPIOD_LIB}
+        ${M_LIB}
+)
+
+set_target_properties(LinHTSupport PROPERTIES
+    PREFIX "lib"
+)

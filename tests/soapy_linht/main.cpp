@@ -7,20 +7,36 @@
 #include <zmq.h>
 
 #include <algorithm>
+#include <cmath>
+#include <complex>
+#include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
-#include <stdexcept>
-#include <iostream>
-#include <deque>
+
+extern "C" {
+#include <sx1255.h>
+}
 
 #include "fir.h"
 
 static const size_t ZMQ_LEN_INTS = 2048;  // 2048 int32_t → 1024 complex samples
-static const size_t ZMQ_MSG_BYTES = ZMQ_LEN_INTS * sizeof(int32_t);
 static const size_t ZMQ_COMPLEX_SAMPLES = ZMQ_LEN_INTS / 2;
 static const double LINHT_SAMPLE_RATE = 500000.0; // 500 kSa/s
 static const double LINHT_CENTER_FREQ = 433.475e6;
+
+// SX1255 is a global singleton (the chip is only one and is shared).
+// SoapySDR may create *multiple* LinHTZmqDevice instances for one client
+// (e.g. during negotiation), and each instance calls the constructor/destructor.
+// Without this reference counter we would call sx1255_init()/sx1255_cleanup()
+// multiple times and break the GPIO/SPI state for others.
+// `g_sx1255_users` ensures that SX1255 is initialized only once and cleaned up
+// only when the last device instance is destroyed.
+static int g_sx1255_users = 0;
 
 // Opaque stream state for this driver
 struct LinHTZmqStream
@@ -117,8 +133,8 @@ public:
 
         if (name.empty() || name == "RF")
         {
-            // TODO: This driver does not change setting of the SX1255, yet.
             centerFreqHz = frequency;
+            applyHardwareFrequency();
         }
     }
 
@@ -270,14 +286,6 @@ public:
         st->fir.reset();
         st->dc_i = st->dc_q = 0.0f;
         st->fifo.clear();
-
-        // Flush any queued ZMQ messages so we start "fresh"
-        int32_t tmp[ZMQ_LEN_INTS];
-        while (true)
-        {
-            int rc = zmq_recv(zmqSub, tmp, sizeof(tmp), ZMQ_DONTWAIT);
-            if (rc <= 0) break;
-        }
 
         return 0;
     }
@@ -434,6 +442,33 @@ private:
     void *zmqSub;
     std::string endpoint;
     double centerFreqHz;
+
+    // SX1255 related
+    // SX1255 related (default values are set in constructor,
+    // findLinHTZmq() may override them via Kwargs)
+    bool rfCtrlAvailable;
+    std::string spiDevice;
+    std::string gpioChip;
+    int resetPinOffset;
+
+    void applyHardwareFrequency()
+    {
+        if (!rfCtrlAvailable)
+        {
+            return;
+        }
+
+        double freq = centerFreqHz;
+        if (freq < 420.0e6) freq = 420.0e6;
+        if (freq > 470.0e6) freq = 470.0e6;
+
+        uint32_t f_hz = static_cast<uint32_t>(freq + 0.5);
+
+        sx1255_set_rx_freq(f_hz);
+        // sx1255_set_tx_freq(f_hz);
+
+        std::cerr << "LinHTZmq: SX1255 tuned to " << f_hz / 1e6 << " MHz\n";
+    }
 };
 
 LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
@@ -441,29 +476,28 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
     , zmqSub(nullptr)
     , endpoint("ipc:///tmp/bsb_rx")
     , centerFreqHz(LINHT_CENTER_FREQ)
+    , rfCtrlAvailable(false)
+    , spiDevice("/dev/spidev0.0")
+    , gpioChip("/dev/gpiochip0")
+    , resetPinOffset(22)
 {
-    auto it = args.find("rx_endpoint");
-    if (it != args.end())
-    {
-        endpoint = it->second;
-    }
+    auto epIt = args.find("rx_endpoint");
+    if(epIt != args.end())
+        endpoint = epIt->second;
 
     zmqCtx = zmq_ctx_new();
-    if (!zmqCtx)
-    {
+    if(!zmqCtx)
         throw std::runtime_error("LinHTZmq: failed to create ZMQ context");
-    }
 
     zmqSub = zmq_socket(zmqCtx, ZMQ_SUB);
-    if (!zmqSub)
+    if(!zmqSub)
     {
         zmq_ctx_term(zmqCtx);
         throw std::runtime_error("LinHTZmq: failed to create ZMQ SUB socket");
     }
 
-    // Subscribe to all messages.
     int rc = zmq_setsockopt(zmqSub, ZMQ_SUBSCRIBE, "", 0);
-    if (rc != 0)
+    if(rc != 0)
     {
         zmq_close(zmqSub);
         zmq_ctx_term(zmqCtx);
@@ -471,7 +505,7 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
     }
 
     rc = zmq_connect(zmqSub, endpoint.c_str());
-    if (rc != 0)
+    if(rc != 0)
     {
         zmq_close(zmqSub);
         zmq_ctx_term(zmqCtx);
@@ -479,8 +513,70 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
     }
 
     std::cerr << "LinHTZmq: connected to " << endpoint
-          << " (CF32, " << LINHT_SAMPLE_RATE/1000.0 << " kSa/s, "
-          << centerFreqHz/1e6 << " MHz)\n";
+              << " (CF32, " << LINHT_SAMPLE_RATE/1000.0 << " kSa/s, "
+              << centerFreqHz/1e6 << " MHz)\n";
+
+    // SX1255 config.
+    auto spiIt = args.find("sx1255_spi");
+    if(spiIt != args.end())
+    {
+        spiDevice = spiIt->second;
+    }
+
+    auto gpioIt = args.find("sx1255_gpio");
+    if(gpioIt != args.end())
+    {
+        gpioChip = gpioIt->second;
+    }
+
+    auto rstIt = args.find("sx1255_reset");
+    if(rstIt != args.end())
+    {
+        const std::string &val = rstIt->second;
+        char *end = nullptr;
+        long v = std::strtol(val.c_str(), &end, 10);
+
+        if (end != val.c_str() && *end == '\0' &&
+            v >= 0 && v <= std::numeric_limits<int>::max())
+        {
+            resetPinOffset = static_cast<int>(v);
+        }
+        else
+        {
+            std::cerr << "LinHTZmq: invalid sx1255_reset '" << val
+                      << "', keeping default " << resetPinOffset << "\n";
+        }
+    }
+
+    // --- SX1255 init ---
+    if (g_sx1255_users == 0) {
+        rc = sx1255_init(spiDevice.c_str(), gpioChip.c_str(), resetPinOffset);
+        if(rc != 0)
+        {
+            std::cerr << "LinHTZmq: sx1255_init("
+                      << spiDevice << ", " << gpioChip
+                      << ", " << resetPinOffset << ") failed, rc=" << rc << "\n";
+            rfCtrlAvailable = false;
+            return;
+        }
+
+        std::cerr
+            << "LinHTZmq: using SX1255 spi="
+            << spiDevice
+            << " gpio=" << gpioChip
+            << " reset=" << resetPinOffset << "\n";
+
+        sx1255_reset();
+        sx1255_set_rate(SX1255_RATE_500K);
+        sx1255_set_rx_pll_bw(75);
+        sx1255_set_tx_pll_bw(75);
+        sx1255_enable_rx(true);
+        // sx1255_enable_tx(true);
+    }
+
+    g_sx1255_users++;
+    rfCtrlAvailable = true;
+    applyHardwareFrequency();
 }
 
 LinHTZmqDevice::~LinHTZmqDevice()
@@ -495,12 +591,20 @@ LinHTZmqDevice::~LinHTZmqDevice()
         zmq_ctx_term(zmqCtx);
         zmqCtx = nullptr;
     }
+
+    g_sx1255_users--;
+    if (g_sx1255_users == 0)
+    {
+        sx1255_cleanup();
+    }
+    rfCtrlAvailable = false;
 }
 
 static SoapySDR::KwargsList findLinHTZmq(const SoapySDR::Kwargs &args)
 {
     SoapySDR::KwargsList results;
 
+    // Filtr na driver=linht (pokud uživatel něco zadal)
     auto it = args.find("driver");
     if (it != args.end() && it->second != "linht")
         return results;
@@ -509,11 +613,28 @@ static SoapySDR::KwargsList findLinHTZmq(const SoapySDR::Kwargs &args)
     dev["driver"] = "linht";
     dev["label"] = "LinHT ZMQ";
 
+    // Defaulty pro SX1255 + RX endpoint
+    dev["rx_endpoint"]  = "ipc:///tmp/bsb_rx";
+    dev["sx1255_spi"]   = "/dev/spidev0.0";
+    dev["sx1255_gpio"]  = "/dev/gpiochip0";
+    dev["sx1255_reset"] = "22";
+
+    // Když uživatel v původních args něco přepíše, respektuj to:
     auto epIt = args.find("rx_endpoint");
     if (epIt != args.end())
-    {
         dev["rx_endpoint"] = epIt->second;
-    }
+
+    auto spiIt = args.find("sx1255_spi");
+    if (spiIt != args.end())
+        dev["sx1255_spi"] = spiIt->second;
+
+    auto gpioIt = args.find("sx1255_gpio");
+    if (gpioIt != args.end())
+        dev["sx1255_gpio"] = gpioIt->second;
+
+    auto rstIt = args.find("sx1255_reset");
+    if (rstIt != args.end())
+        dev["sx1255_reset"] = rstIt->second;
 
     results.push_back(dev);
     return results;
