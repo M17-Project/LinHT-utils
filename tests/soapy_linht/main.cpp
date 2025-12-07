@@ -231,8 +231,82 @@ public:
     std::string getAntenna(const int direction,
                            const size_t channel) const
     {
-        if (direction == SOAPY_SDR_RX && channel == 0) return "RX";
+        if(direction == SOAPY_SDR_RX && channel == 0) return "RX";
         return "";
+    }
+
+    // Gain api ----------------------------------------------------------
+    std::vector<std::string> listGains(int dir, size_t chan) const
+    {
+        if(dir == SOAPY_SDR_RX && chan == 0)
+            return {"LNA", "PGA", "DAC", "MIX"};
+        return {};
+    }
+
+    double getGain(int dir, size_t chan, const std::string &name) const
+    {
+        if(dir != SOAPY_SDR_RX || chan != 0) return 0.0;
+
+        if(name == "LNA") return lnaGainDb;
+        if(name == "PGA") return pgaGainDb;
+        if(name == "DAC") return dacGainDb;
+        if(name == "MIX") return mixGainDb;
+
+        return 0.0;
+    }
+
+    SoapySDR::Range getGainRange(int dir, size_t chan, const std::string &name) const
+    {
+        if(dir != SOAPY_SDR_RX || chan != 0) return SoapySDR::Range();
+
+        if(name == "LNA") return SoapySDR::Range(0.0, 48.0);
+        if(name == "PGA") return SoapySDR::Range(0.0, 30.0);
+        if(name == "DAC") return SoapySDR::Range(-9.0, 0.0);
+        if(name == "MIX") return SoapySDR::Range(-37.5, -7.5);
+
+        return SoapySDR::Range();
+    }
+
+    void setGain(int dir, size_t chan,
+             const std::string &name,
+             const double value)
+    {
+        if(dir != SOAPY_SDR_RX || chan != 0 || !rfCtrlAvailable) return;
+
+        std::cerr << "LinHTZmq: " << name <<" gain set to " << value << " dB\n";
+
+        if(name == "LNA")
+        {
+            double g = std::clamp(value, 0.0, 48.0);
+            sx1255_set_lna_gain(static_cast<uint8_t>(std::lround(g)));
+            lnaGainDb = g;
+        }
+        else if(name == "PGA")
+        {
+            double g = std::clamp(value, 0.0, 30.0);
+            sx1255_set_pga_gain(static_cast<uint8_t>(std::lround(g)));
+            pgaGainDb = g;
+        }
+        else if(name == "DAC")
+        {
+            // snap to allowed values: 0, -3, -6, -9
+            static const double allowed[] = {0.0, -3.0, -6.0, -9.0};
+            double best = allowed[0];
+            double bestDiff = std::abs(value - best);
+            for (double a : allowed)
+            {
+                double d = std::abs(value - a);
+                if (d < bestDiff) { best = a; bestDiff = d; }
+            }
+            sx1255_set_dac_gain(static_cast<int8_t>(std::lround(best)));
+            dacGainDb = best;
+        }
+        else if(name == "MIX")
+        {
+            double g = std::clamp(value, -37.5, -7.5);
+            sx1255_set_mixer_gain(static_cast<float>(g));
+            mixGainDb = g;
+        }
     }
 
     // Stream API --------------------------------------------------------
@@ -441,7 +515,12 @@ private:
     void *zmqCtx;
     void *zmqSub;
     std::string endpoint;
+
     double centerFreqHz;
+    double lnaGainDb = 0.0;
+    double pgaGainDb = 24.0;
+    double dacGainDb = -3.0;
+    double mixGainDb = -9.5;
 
     // SX1255 related
     // SX1255 related (default values are set in constructor,
@@ -572,6 +651,12 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
         sx1255_set_tx_pll_bw(75);
         sx1255_enable_rx(true);
         // sx1255_enable_tx(true);
+
+        sx1255_set_lna_gain(static_cast<uint8_t>(std::lround(lnaGainDb)));
+        sx1255_set_pga_gain(static_cast<uint8_t>(std::lround(pgaGainDb)));
+        sx1255_set_dac_gain(static_cast<int8_t>(std::lround(dacGainDb)));
+        sx1255_set_mixer_gain(static_cast<float>(mixGainDb));
+
     }
 
     g_sx1255_users++;
