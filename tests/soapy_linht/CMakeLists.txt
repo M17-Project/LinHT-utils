@@ -44,3 +44,7 @@ target_link_libraries(LinHTSupport
 set_target_properties(LinHTSupport PROPERTIES
     PREFIX "lib"
 )
+
+install(TARGETS LinHTSupport
+    LIBRARY DESTINATION lib/SoapySDR/modules0.8
+)
