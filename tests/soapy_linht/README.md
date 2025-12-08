@@ -12,26 +12,38 @@ The driver receives IQ samples from the LinHT internal **ZMQ stream**
 * **inverse-sinc equalization** (SX1255 compensation FIR)
 * **DC offset removal**
 * **float (CF32) normalization**
+* optional conversion to **CS16** for tools like rtl_433
 
-and provides them to applications such as:
+This allows LinHT to behave like a conventional local or network SDR receiver,
+usable by:
 
 * [OpenWebRX](https://www.openwebrx.de/)
 * [GNU Radio](https://wiki.gnuradio.org/index.php/Soapy)
 * [rtl_433](https://github.com/merbanan/rtl_433)
-* any SDR tool that supports SoapySDR
+* any SDR tool supporting the SoapySDR API
 
 It enables LinHT to behave like a conventional local or network-attached SDR
 receiver.
 
 ## Features
 
-* **CF32 output** (native float complex samples)
+* **CF32** (native float complex samples)
+* **CS16** compatible path for rtl_433
+* SX1255 **frequency tuning**
+* SX1255 **gain control** (LNA, PGA, DAC, MIX)
 * Automatic **DC offset removal**
-* **FIFO-based streaming**
-* Works through **SoapyRemote** (SoapySDRServer)
-* Compatible with OpenWebRX
-* Designed for **LinHT handheld SDR** (M17 Project)
-* RX only, no setFrequency or any other SX1255 parameters (yet)
+* Integrated **inverse-sinc FIR equalizer**
+* FIFO-based streaming for consistent MTU handling
+* Works both locally and via **SoapyRemote**
+* Designed specifically for the **LinHT SDR**
+* **RX only** (TX will come later)
+
+## Limitations
+
+* RX only
+* Sample rate fixed at **500 kSa/s**
+* Only one hardware RX stream
+* Bandwidth control not implemented (fixed by hardware)
 
 ## Repository Structure
 
@@ -53,8 +65,9 @@ You need:
 * CMake ≥ 3.10
 * SoapySDR development headers
 * ZeroMQ (libzmq, libczmq or similar)
+* LinHT SX1255 control library (`libsx1255.so`)
 
-Install dependencies (Debian/Ubuntu):
+Install dependencies:
 
 ```bash
 sudo apt install cmake g++ libsoapysdr-dev libzmq3-dev
@@ -119,6 +132,40 @@ Example OpenWebRX source configuration:
     },
 ```
 
+## Using with rtl_433
+
+Example command
+
+```
+$ rtl_433 \
+-d "driver=remote,remote=10.17.17.17:55132,remote:driver=linht" \
+-f 433850k \
+-s 500000 \
+-M stats -M level -M noise
+```
+
+## SX1255 Hardware Control
+
+The driver supports:
+
+* Frequency tuning
+* Gain control
+
+Gain is mapped to SX1255 HW blocks:
+
+| Name    | Description                 | Range             |
+| ------- | --------------------------- | ----------------- |
+| **LNA** | RF preamp                   | 0–48 dB           |
+| **PGA** | Programmable gain amplifier | 0–30 dB           |
+| **DAC** | DAC attenuation             | 0, -3, -6, -9 dB  |
+| **MIX** | Mixer gain                  | −37.5 to −7.5 dB  |
+
+You can manually set gain:
+
+```bash
+SoapySDRUtil --set="LNA=30"
+```
+
 ## How It Works Internally
 
 The driver:
@@ -130,6 +177,7 @@ The driver:
    * DC removal
    * FIFO buffering
 3. Feeds exactly **numElems** samples to SoapySDR, matching SoapyRemote UDP MTU (≈178 complex samples)
+4. Hardware control (frequency + gains) goes directly to SX1255 SPI/GPIO
 
 ## Contact
 
