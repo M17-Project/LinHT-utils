@@ -81,6 +81,7 @@ const uint16_t key_seq_1[11] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
 
 // ZeroMQ and PMT
 const char *zmq_ipc = "ipc:///tmp/ptt_msg";
+const char *aux_ipc = "ipc:///tmp/fg_aux_data_out";
 
 uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
@@ -478,8 +479,6 @@ int main(void)
 		fprintf(stderr, "ZeroMQ: Error binding to Unix socket %s.\nExiting.\n", zmq_ipc);
 		return -1;
 	}
-
-	const char *aux_ipc = "ipc:///tmp/fg_aux_data_out";
 
 	void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
 	if (!zmq_sub)
