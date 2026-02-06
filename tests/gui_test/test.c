@@ -39,10 +39,20 @@ enum
 	IMG_BATT_100,
 	IMG_VFO_ACT,
 	IMG_VFO_INACT,
-	IMG_COUNT = IMG_VFO_INACT + 1
+	IMG_COUNT
 };
 
 Texture2D texture[IMG_COUNT];
+
+enum
+{
+	DISP_VFO,
+	DISP_MSG
+};
+
+uint8_t disp_state = DISP_VFO;
+
+Font customFont, customFont10, customFont12;
 
 // settings
 const char *settings_file = "/usr/share/linht/settings.yaml";
@@ -84,6 +94,17 @@ bool esc_pressed = false;
 
 // spawning flowgraphs (python)
 pid_t fg_pid;
+
+// M17
+typedef struct
+{
+	char src[10];
+	char dst[10];
+	uint16_t len;
+	char text[825 - 4];
+} msg_t;
+
+msg_t last_msg;
 
 // misc
 uint8_t redraw_req = 1;
@@ -134,22 +155,22 @@ void load_gfx(void)
 
 /*Texture2D RenderTextToTexture(const char *text, Font font, int fontSize, Color color)
 {
-    Vector2 size = MeasureTextEx(font, text, fontSize, 0);
-    Image img = GenImageColor(size.x, size.y, BLANK);
+	Vector2 size = MeasureTextEx(font, text, fontSize, 0);
+	Image img = GenImageColor(size.x, size.y, BLANK);
 
-    ImageDrawTextEx(
-        &img,
-        font,
-        text,
-        (Vector2){0, 0},
-        fontSize,
-        0,
-        color
-    );
+	ImageDrawTextEx(
+		&img,
+		font,
+		text,
+		(Vector2){0, 0},
+		fontSize,
+		0,
+		color
+	);
 
-    Texture2D tex = LoadTextureFromImage(img);
-    UnloadImage(img);
-    return tex;
+	Texture2D tex = LoadTextureFromImage(img);
+	UnloadImage(img);
+	return tex;
 }*/
 
 int kbd_init(int *fhandle, const char *path)
@@ -196,6 +217,168 @@ void sx1255_pa_enable(bool ena)
 	}
 }
 
+// display misc stuff
+static void DrawTextBoxedSelectable(Font font, const char *text, Rectangle rec, float fontSize, float spacing, bool wordWrap, Color tint, int selectStart, int selectLength, Color selectTint, Color selectBackTint)
+{
+	int length = TextLength(text); // Total length in bytes of the text, scanned by codepoints in loop
+
+	float textOffsetY = 0;	  // Offset between lines (on line break '\n')
+	float textOffsetX = 0.0f; // Offset X to next character to draw
+
+	float scaleFactor = fontSize / (float)font.baseSize; // Character rectangle scaling factor
+
+	// Word/character wrapping mechanism variables
+	enum
+	{
+		MEASURE_STATE = 0,
+		DRAW_STATE = 1
+	};
+	int state = wordWrap ? MEASURE_STATE : DRAW_STATE;
+
+	int startLine = -1; // Index where to begin drawing (where a line begins)
+	int endLine = -1;	// Index where to stop drawing (where a line ends)
+	int lastk = -1;		// Holds last value of the character position
+
+	for (int i = 0, k = 0; i < length; i++, k++)
+	{
+		// Get next codepoint from byte string and glyph index in font
+		int codepointByteCount = 0;
+		int codepoint = GetCodepoint(&text[i], &codepointByteCount);
+		int index = GetGlyphIndex(font, codepoint);
+
+		// NOTE: Normally we exit the decoding sequence as soon as a bad byte is found (and return 0x3f)
+		// but we need to draw all of the bad bytes using the '?' symbol moving one byte
+		if (codepoint == 0x3f)
+			codepointByteCount = 1;
+		i += (codepointByteCount - 1);
+
+		float glyphWidth = 0;
+		if (codepoint != '\n')
+		{
+			glyphWidth = (font.glyphs[index].advanceX == 0) ? font.recs[index].width * scaleFactor : font.glyphs[index].advanceX * scaleFactor;
+
+			if (i + 1 < length)
+				glyphWidth = glyphWidth + spacing;
+		}
+
+		// NOTE: When wordWrap is ON we first measure how much of the text we can draw before going outside of the rec container
+		// We store this info in startLine and endLine, then we change states, draw the text between those two variables
+		// and change states again and again recursively until the end of the text (or until we get outside of the container)
+		// When wordWrap is OFF we don't need the measure state so we go to the drawing state immediately
+		// and begin drawing on the next line before we can get outside the container
+		if (state == MEASURE_STATE)
+		{
+			// TODO: There are multiple types of spaces in UNICODE, maybe it's a good idea to add support for more
+			// Ref: http://jkorpela.fi/chars/spaces.html
+			if ((codepoint == ' ') || (codepoint == '\t') || (codepoint == '\n'))
+				endLine = i;
+
+			if ((textOffsetX + glyphWidth) > rec.width)
+			{
+				endLine = (endLine < 1) ? i : endLine;
+				if (i == endLine)
+					endLine -= codepointByteCount;
+				if ((startLine + codepointByteCount) == endLine)
+					endLine = (i - codepointByteCount);
+
+				state = !state;
+			}
+			else if ((i + 1) == length)
+			{
+				endLine = i;
+				state = !state;
+			}
+			else if (codepoint == '\n')
+				state = !state;
+
+			if (state == DRAW_STATE)
+			{
+				textOffsetX = 0;
+				i = startLine;
+				glyphWidth = 0;
+
+				// Save character position when we switch states
+				int tmp = lastk;
+				lastk = k - 1;
+				k = tmp;
+			}
+		}
+		else
+		{
+			if (codepoint == '\n')
+			{
+				if (!wordWrap)
+				{
+					textOffsetY += (font.baseSize + font.baseSize / 2) * scaleFactor / 1.5;
+					textOffsetX = 0;
+				}
+			}
+			else
+			{
+				if (!wordWrap && ((textOffsetX + glyphWidth) > rec.width))
+				{
+					textOffsetY += (font.baseSize + font.baseSize / 2) * scaleFactor / 1.5;
+					textOffsetX = 0;
+				}
+
+				// When text overflows rectangle height limit, just stop drawing
+				if ((textOffsetY + font.baseSize * scaleFactor) > rec.height)
+					break;
+
+				// Draw selection background
+				bool isGlyphSelected = false;
+				if ((selectStart >= 0) && (k >= selectStart) && (k < (selectStart + selectLength)))
+				{
+					DrawRectangleRec((Rectangle){rec.x + textOffsetX - 1, rec.y + textOffsetY, glyphWidth, (float)font.baseSize * scaleFactor}, selectBackTint);
+					isGlyphSelected = true;
+				}
+
+				// Draw current character glyph
+				if ((codepoint != ' ') && (codepoint != '\t'))
+				{
+					DrawTextCodepoint(font, codepoint, (Vector2){rec.x + textOffsetX, rec.y + textOffsetY}, fontSize, isGlyphSelected ? selectTint : tint);
+				}
+			}
+
+			if (wordWrap && (i == endLine))
+			{
+				textOffsetY += (font.baseSize + font.baseSize / 2) * scaleFactor / 1.5;
+				textOffsetX = 0;
+				startLine = endLine;
+				endLine = -1;
+				glyphWidth = 0;
+				selectStart += lastk - k;
+				k = lastk;
+
+				state = !state;
+			}
+		}
+
+		if ((textOffsetX != 0) || (codepoint != ' '))
+			textOffsetX += glyphWidth; // avoid leading spaces
+	}
+}
+
+static void DrawTextBoxed(Font font, const char *text, Rectangle rec, float fontSize, float spacing, bool wordWrap, Color tint)
+{
+	DrawTextBoxedSelectable(font, text, rec, fontSize, spacing, wordWrap, tint, 0, 0, WHITE, WHITE);
+}
+
+void displayMessage(const char *src, const char *dst, const char *msg)
+{
+	char src_line[10], dst_line[10];
+
+	sprintf(src_line, "From: %s\n", src);
+	(void)dst;
+	(void)dst_line;
+
+	// clear drawing area
+	DrawRectangle(0, 18, RES_X - 1, RES_Y - 1, bkg_color);
+
+	DrawTextEx(customFont, src_line, (Vector2){2.0f, 20.0f}, 14.0f, 0, ORANGE);
+	DrawTextBoxed(customFont, msg, (Rectangle){2, 40, RES_X - 1 - 2, RES_Y - 1 - 2}, 14.0f, 0, true, WHITE);
+}
+
 int main(void)
 {
 	// load settings
@@ -212,7 +395,7 @@ int main(void)
 		fprintf(stderr, "Failed to load: %s\n", cyaml_strerror(err));
 		return -1;
 	}
-	
+
 	// settings (clean this up)
 	uint32_t vfo_a_rx_f = conf->channels.vfo_0.rx_freq;
 	uint32_t vfo_a_tx_f = conf->channels.vfo_0.tx_freq;
@@ -262,11 +445,11 @@ int main(void)
 	}
 
 	sx1255_reset();
-	if(rf_rate == 500)
+	if (rf_rate == 500)
 		sx1255_set_rate(SX1255_RATE_500K);
-	else if(rf_rate == 250)
+	else if (rf_rate == 250)
 		sx1255_set_rate(SX1255_RATE_250K);
-	else if(rf_rate == 125)
+	else if (rf_rate == 125)
 		sx1255_set_rate(SX1255_RATE_125K);
 	sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
 	sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
@@ -296,9 +479,26 @@ int main(void)
 		return -1;
 	}
 
+	const char *aux_ipc = "ipc:///tmp/fg_aux_data_out";
+
+	void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
+	if (!zmq_sub)
+	{
+		fprintf(stderr, "ZeroMQ: Error spawning a SUB socket.\nExiting.\n");
+		return -1;
+	}
+
+	zmq_setsockopt(zmq_sub, ZMQ_SUBSCRIBE, "", 0);
+
+	if (zmq_connect(zmq_sub, aux_ipc) != 0)
+	{
+		fprintf(stderr, "ZeroMQ: Cannot connect to %s.\nExiting.\n", aux_ipc);
+		return -1;
+	}
+
 	pmt_len = string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
-	
+
 	// config TX sustain time
 	// this should be done per VFO
 	// but we assume we use only VFO A
@@ -315,9 +515,9 @@ int main(void)
 	InitWindow(RES_X, RES_Y, "GUI test");
 	SetWindowState(FLAG_VSYNC_HINT);
 
-	Font customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
-	Font customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
-	Font customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
+	customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
+	customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
+	customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
 
 	// load images
 	load_gfx();
@@ -325,7 +525,7 @@ int main(void)
 	// set FPS
 	SetTargetFPS(15);
 
-	//execute FG, TODO: the parameters are only OK for M17 FG
+	// execute FG, TODO: the parameters are only OK for M17 FG
 	char *fg_path = conf->channels.vfo_0.fg;
 	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
 
@@ -346,21 +546,21 @@ int main(void)
 		dup2(devnull, STDOUT_FILENO);
 		dup2(devnull, STDERR_FILENO);
 
-    	close(devnull);   // close /dev/null
+		close(devnull); // close /dev/null
 
 		execlp("python", "python",
-           fg_path,
-           "-o", offs_str,
-           "-S", conf->channels.vfo_0.extra.src,
-           "-D", conf->channels.vfo_0.extra.dst,
-           "-C", can_str,
-           (char*)NULL);
+			   fg_path,
+			   "-o", offs_str,
+			   "-S", conf->channels.vfo_0.extra.src,
+			   "-D", conf->channels.vfo_0.extra.dst,
+			   "-C", can_str,
+			   (char *)NULL);
 
 		// if execp fails
-    	fprintf(stderr, "Failed to execute GNU Radio flowgraph\n");
-    	exit(EXIT_FAILURE);
+		fprintf(stderr, "Failed to execute GNU Radio flowgraph\n");
+		exit(EXIT_FAILURE);
 	}
-	
+
 	// ready!
 	fprintf(stderr, "Ready! Awaiting commands...\n");
 
@@ -373,36 +573,68 @@ int main(void)
 		// poll for terminal events even if no redrawing is required
 		PollInputEvents();
 
+		// poll ZMQ (M17 messages etc.)
+		zmq_pollitem_t items[] = {{zmq_sub, 0, ZMQ_POLLIN, 0}};
+
+		int rc = zmq_poll(items, 1, 0); // timeout 0 = non-blocking
+		if (rc > 0 && (items[0].revents & ZMQ_POLLIN))
+		{
+			uint8_t buf[1024];
+			int len = zmq_recv(zmq_sub, buf, sizeof(buf), 0);
+			if (len > 0)
+			{
+				// TODO: parse real data here
+				strcpy(last_msg.src, "N0CALL");
+				strcpy(last_msg.dst, "@ALL");
+				sprintf(last_msg.text, "ZMQ PMT received, length: %d bytes.", len);
+
+				disp_state = DISP_MSG;
+				redraw_req = 1;
+			}
+		}
+
+		// check keypad events
 		struct input_event ev;
 		ssize_t n = read(kbd, &ev, sizeof(ev)); // non-blocking
-		if (n==(ssize_t)sizeof(ev) && ev.type==EV_KEY)
+		if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
 		{
 			if (ev.value == KEY_PRESS)
 			{
 				if (ev.code == KEY_P)
 				{
-					sx1255_enable_rx(false);
-					sx1255_pa_enable(true);
-					linht_ctrl_tx_rx_switch_set(false);
-					linht_ctrl_red_led_set(true);
-					zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
-					vfo_a_tx = true;
-					fprintf(stderr, "PTT pressed\n");
-					redraw_req = 1;
+					if (disp_state == DISP_VFO)
+					{
+						sx1255_enable_rx(false);
+						sx1255_pa_enable(true);
+						linht_ctrl_tx_rx_switch_set(false);
+						linht_ctrl_red_led_set(true);
+						zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
+						vfo_a_tx = true;
+						fprintf(stderr, "PTT pressed\n");
+						redraw_req = 1;
+					}
 				}
 				else if (ev.code == KEY_UP)
 				{
-					vfo_a_rx_f += 12500; vfo_a_tx_f += 12500; 
-					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
-					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
-					redraw_req = 1;
+					if (disp_state == DISP_VFO)
+					{
+						vfo_a_rx_f += 12500;
+						vfo_a_tx_f += 12500;
+						sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+						sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
+						redraw_req = 1;
+					}
 				}
 				else if (ev.code == KEY_DOWN)
 				{
-					vfo_a_rx_f -= 12500; vfo_a_tx_f -= 12500;
-					sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
-					sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
-					redraw_req = 1;
+					if (disp_state == DISP_VFO)
+					{
+						vfo_a_rx_f -= 12500;
+						vfo_a_tx_f -= 12500;
+						sx1255_set_rx_freq(vfo_a_rx_f * (1.0 + freq_corr * 1e-6));
+						sx1255_set_tx_freq(vfo_a_tx_f * (1.0 + freq_corr * 1e-6));
+						redraw_req = 1;
+					}
 				}
 				else if (ev.code == KEY_LEFT)
 				{
@@ -416,6 +648,12 @@ int main(void)
 				{
 					esc_start = time(NULL);
 					esc_pressed = true;
+
+					if (disp_state == DISP_MSG)
+					{
+						disp_state = DISP_VFO;
+						redraw_req = 1;
+					}
 				}
 				else
 				{
@@ -423,12 +661,12 @@ int main(void)
 				}
 
 				// remember last pressed keys
-				for (uint8_t i=0; i<11; i++)
-					last_pressed[i] = last_pressed[i+1];
+				for (uint8_t i = 0; i < 11; i++)
+					last_pressed[i] = last_pressed[i + 1];
 				last_pressed[11] = ev.code;
 
 				// check against a secret combination :)
-				if (memcmp((uint8_t*)&last_pressed[12-11], (uint8_t*)key_seq_1, sizeof(key_seq_1)) == 0)
+				if (memcmp((uint8_t *)&last_pressed[12 - 11], (uint8_t *)key_seq_1, sizeof(key_seq_1)) == 0)
 				{
 					fprintf(stderr, "Shutting down now.\n");
 					system("shutdown now");
@@ -439,18 +677,21 @@ int main(void)
 			{
 				if (ev.code == KEY_P)
 				{
-					zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
-					// we assume VFO A is being used
-					// this is blocking - might be bad :)
-					usleep(vfo_a_tx_sust*1000);
-					
-					sx1255_enable_rx(true);
-					sx1255_pa_enable(false);
-					linht_ctrl_tx_rx_switch_set(true);
-					linht_ctrl_red_led_set(false);
-					vfo_a_tx = false;
-					fprintf(stderr, "PTT released\n");
-					redraw_req = 1;
+					if (disp_state == DISP_VFO)
+					{
+						zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
+						// we assume VFO A is being used
+						// this is blocking - might be bad :)
+						usleep(vfo_a_tx_sust * 1000);
+
+						sx1255_enable_rx(true);
+						sx1255_pa_enable(false);
+						linht_ctrl_tx_rx_switch_set(true);
+						linht_ctrl_red_led_set(false);
+						vfo_a_tx = false;
+						fprintf(stderr, "PTT released\n");
+						redraw_req = 1;
+					}
 				}
 				else if (ev.code == KEY_ESC)
 				{
@@ -462,18 +703,18 @@ int main(void)
 				}
 			}
 		}
-		
+
 		// check if ESC button has been pressed for at least 5 seconds
 		if (esc_pressed && time(NULL) - esc_start >= 5)
 			break;
 
 		//'gnss' icon
-		if (gnss_display==1 && gnss_display_last==0)
+		if (gnss_display == 1 && gnss_display_last == 0)
 		{
 			gnss_display_last = 1;
 			redraw_req = 1;
 		}
-		else if (gnss_display==0 && gnss_display_last==1)
+		else if (gnss_display == 0 && gnss_display_last == 1)
 		{
 			gnss_display_last = 0;
 			redraw_req = 1;
@@ -496,7 +737,7 @@ int main(void)
 				if (fscanf(fp, "%d", &value) == 1)
 				{
 					batt_mv = (uint16_t)(value / 4096.0 * 1.8 * (39.0 + 10.0) / 10.0 * 1000.0);
-					snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv%1000) / 100);
+					snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv % 1000) / 100);
 				}
 				else
 				{
@@ -539,10 +780,10 @@ int main(void)
 			ClearBackground(bkg_color);
 
 			// draw the wallpaper
-			//DrawTexture(texture[IMG_WALLPAPER], 0, 0, WHITE);
+			// DrawTexture(texture[IMG_WALLPAPER], 0, 0, WHITE);
 
 			// draw header
-			DrawRectangle(0, 0, RES_X, 17, top_bar_color);
+			DrawRectangle(0, 0, RES_X - 1, 17, top_bar_color);
 			DrawLine(0, 17, RES_X - 1, 17, line_color);
 
 			// top to bottom, left to right (more or less)
@@ -556,47 +797,49 @@ int main(void)
 			// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
 			DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
 
-			// VFO A
-			DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
-			DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
-			DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
-			char freq_a_str[10];
-			uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
-			snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a%1000000) / 1000);
-			DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
-			snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
-			DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
-			DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
-			DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
-			DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
-			// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
+			if (disp_state == DISP_VFO)
+			{
+				// VFO A
+				DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
+				DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
+				DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
+				char freq_a_str[10];
+				uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
+				snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a % 1000000) / 1000);
+				DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
+				snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
+				DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
+				DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
+				DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
+				DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
+				// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
 
-			// horizontal separating bar
-			DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
+				// horizontal separating bar
+				DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
 
-			// VFO B
-			DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
-			DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
-			DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
-			char freq_b_str[10];
-			uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
-			snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b%1000000) / 1000);
-			DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
-			snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
-			DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
-			DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
-			DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
-			DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
-
-			// test
-			// Rectangle src = {0, 0, (float)texture.width, (float)texture.height};
-			// Rectangle dst = {0, 0, RES_X, RES_Y};
-			// DrawTexturePro(texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+				// VFO B
+				DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
+				DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
+				DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
+				char freq_b_str[10];
+				uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
+				snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b % 1000000) / 1000);
+				DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
+				snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
+				DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
+				DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
+				DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
+				DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
+			}
+			else if (disp_state == DISP_MSG)
+			{
+				displayMessage(last_msg.src, last_msg.dst, last_msg.text);
+			}
 
 			EndDrawing();
 
@@ -606,14 +849,14 @@ int main(void)
 		// frame counter
 		cnt++;
 		cnt %= 5 * 200;
-		
+
 		// reduce CPU congestion
 		usleep(5e3);
 	}
 
 	// cleanup
 	fprintf(stderr, "Exit code caught. Cleaning up...\n");
-	for (uint8_t i=0; i<IMG_COUNT; i++)
+	for (uint8_t i = 0; i < IMG_COUNT; i++)
 		UnloadTexture(texture[i]);
 	UnloadFont(customFont);
 	UnloadFont(customFont10);
@@ -631,4 +874,3 @@ int main(void)
 
 	return 0;
 }
-
