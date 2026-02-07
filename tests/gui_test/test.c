@@ -887,34 +887,37 @@ int main(void)
 			int len = zmq_recv(zmq_sub, buf, sizeof(buf), 0);
 			if (len > 0)
 			{
-				// TYPE field is discarded for now
-				// TODO: add it later
-				getMsgData(msg.src, msg.dst, NULL, msg.meta, msg.message, buf, len);
+				uint16_t type;
+				getMsgData(msg.src, msg.dst, &type, msg.meta, msg.message, buf, len);
 
-				msg.timestamp = time(NULL);
-				sprintf(msg.protocol, "M17");
-				msg.read = 0;
+				// save to the database and display the contents only if it's a packet
+				if ((type & 1) == 0 && strlen(msg.message))
+				{
+					msg.timestamp = time(NULL);
+					sprintf(msg.protocol, "M17");
+					msg.read = 1;
 
-				// dump to database
-				fprintf(stderr, "Message from %s: %s\n", msg.src, msg.message);
-				push_message(db_path, msg);
+					// dump to database
+					fprintf(stderr, "Message from %s: %s\n", msg.src, msg.message);
+					push_message(db_path, msg);
 
-				// prepare for display
-				strcpy(last_msg.src, msg.src);
-				strcpy(last_msg.dst, msg.dst);
-				strcpy(last_msg.text, msg.message);
+					// prepare for display
+					strcpy(last_msg.src, msg.src);
+					strcpy(last_msg.dst, msg.dst);
+					strcpy(last_msg.text, msg.message);
 
-				// clear the struct for a new message
-				memset((uint8_t *)&msg, 0, sizeof(message_t));
+					// clear the struct for a new message
+					memset((uint8_t *)&msg, 0, sizeof(message_t));
 
-				// blink
-				// TODO: this is bad - blocking, fix it
-				/*linht_ctrl_green_led_set(true);
-				usleep(100e3);
-				linht_ctrl_green_led_set(false);*/
+					// blink
+					// TODO: this is bad - blocking, fix it
+					/*linht_ctrl_green_led_set(true);
+					usleep(100e3);
+					linht_ctrl_green_led_set(false);*/
 
-				disp_state = DISP_MSG;
-				redraw_req = 1;
+					disp_state = DISP_MSG;
+					redraw_req = 1;
+				}
 			}
 		}
 
