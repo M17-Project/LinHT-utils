@@ -18,6 +18,7 @@
 #include <sx1255.h>
 #include <liblinht-ctrl.h>
 #include <cyaml/cyaml.h>
+#include <sqlite3.h>
 #include "settings.h"
 
 // keymap states
@@ -96,16 +97,32 @@ bool esc_pressed = false;
 // spawning flowgraphs (python)
 pid_t fg_pid;
 
-// M17
+// messaging
+const char db_path[128] = "/var/lib/linht/messages.db";
+
 typedef struct
 {
 	char src[10];
 	char dst[10];
-	uint16_t len;
+	uint16_t type;
+	uint8_t meta[14];
 	char text[825 - 4];
-} msg_t;
+} m17_msg_t;
+m17_msg_t last_msg;
 
-msg_t last_msg;
+uint16_t last_id;
+typedef struct message
+{
+	uint16_t id;
+	uint32_t timestamp;
+	char protocol[32];
+	char src[64];
+	char dst[64];
+	uint8_t meta[14];
+	char message[1024];
+	bool read;
+} message_t;
+message_t msg;
 
 // misc
 uint8_t redraw_req = 1;
@@ -504,6 +521,162 @@ void getMsgData(char *src, char *dst, uint16_t *type, uint8_t meta[14], char *ms
 			strcpy(msg, "<empty>");
 }
 
+// message database handlers
+int db_init(const char *db_path)
+{
+	sqlite3 *db;
+	char *err_msg = 0;
+	int retval;
+
+	retval = sqlite3_open(db_path, &db);
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		return 1;
+	}
+
+	const char *create_sql =
+		"CREATE TABLE IF NOT EXISTS messages ("
+		"id INTEGER PRIMARY KEY,"
+		"timestamp INTEGER,"
+		"protocol TEXT,"
+		"source TEXT,"
+		"destination TEXT,"
+		"meta BLOB,"
+		"message TEXT,"
+		"read INTEGER"
+		");";
+
+	retval = sqlite3_exec(db, create_sql, 0, 0, &err_msg);
+
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Failed to ensure table exists: %s\n", err_msg);
+		sqlite3_free(err_msg);
+		sqlite3_close(db);
+		return 1;
+	}
+
+	sqlite3_close(db);
+	return 0;
+}
+
+int push_message(const char *db_path, message_t msg)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt;
+	int retval;
+
+	retval = sqlite3_open(db_path, &db);
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		return 1;
+	}
+
+	// prepare SQL with placeholders
+	const char *sql = "INSERT INTO messages (timestamp, protocol, source, destination, meta, message, read) "
+					  "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+	retval = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+		sqlite3_close(db);
+		return 1;
+	}
+
+	// bind values
+	sqlite3_bind_int64(stmt, 1, (sqlite3_int64)msg.timestamp);			   // timestamp (seconds since epoch)
+	sqlite3_bind_text(stmt, 2, msg.protocol, -1, SQLITE_STATIC);		   // protocol
+	sqlite3_bind_text(stmt, 3, msg.src, -1, SQLITE_STATIC);				   // source
+	sqlite3_bind_text(stmt, 4, msg.dst, -1, SQLITE_STATIC);				   // destination
+	sqlite3_bind_blob(stmt, 5, msg.meta, sizeof(msg.meta), SQLITE_STATIC); // meta
+	sqlite3_bind_text(stmt, 6, msg.message, -1, SQLITE_STATIC);			   // message
+	sqlite3_bind_int(stmt, 7, 0);										   // read flag (0 = unread)
+
+	// execute
+	retval = sqlite3_step(stmt);
+	if (retval != SQLITE_DONE)
+	{
+		fprintf(stderr, "Insert failed: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		sqlite3_close(db);
+		return 1;
+	}
+	else
+	{
+		// printf("New message inserted.\n");
+	}
+
+	sqlite3_finalize(stmt);
+	sqlite3_close(db);
+
+	return 0;
+}
+
+int get_message_count(const char *db_path)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt;
+	int retval, count = 0;
+
+	retval = sqlite3_open(db_path, &db);
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		return -1;
+	}
+
+	retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages;", -1, &stmt, 0);
+	if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		count = sqlite3_column_int(stmt, 0);
+	}
+	else
+	{
+		fprintf(stderr, "Query failed: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		sqlite3_close(db);
+		return -1;
+	}
+
+	sqlite3_finalize(stmt);
+	sqlite3_close(db);
+	return count;
+}
+
+int get_unread_message_count(const char *db_path)
+{
+	sqlite3 *db;
+	sqlite3_stmt *stmt;
+	int retval, count = 0;
+
+	retval = sqlite3_open(db_path, &db);
+	if (retval != SQLITE_OK)
+	{
+		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		return -1;
+	}
+
+	retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages WHERE read = 0;", -1, &stmt, 0);
+	if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		count = sqlite3_column_int(stmt, 0);
+	}
+	else
+	{
+		fprintf(stderr, "Query failed: %s\n", sqlite3_errmsg(db));
+		sqlite3_finalize(stmt);
+		sqlite3_close(db);
+		return -1;
+	}
+
+	sqlite3_finalize(stmt);
+	sqlite3_close(db);
+	return count;
+}
+
 int main(void)
 {
 	// load settings
@@ -587,6 +760,14 @@ int main(void)
 	sx1255_pa_enable(false);
 	linht_ctrl_tx_rx_switch_set(true);
 	fprintf(stderr, "SX1255 setup finished\n");
+
+	// initialize text message database
+	db_init(db_path); // make sure an appropriate table in the DB exists
+
+	if (db_init(db_path) != 0)
+	{
+		fprintf(stderr, "Database initialization failed. Check permissions or path.\n");
+	}
 
 	// keyboard
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
@@ -706,7 +887,32 @@ int main(void)
 			int len = zmq_recv(zmq_sub, buf, sizeof(buf), 0);
 			if (len > 0)
 			{
-				getMsgData(last_msg.src, last_msg.dst, NULL, NULL, last_msg.text, buf, len);
+				// TYPE field is discarded for now
+				// TODO: add it later
+				getMsgData(msg.src, msg.dst, NULL, msg.meta, msg.message, buf, len);
+
+				msg.timestamp = time(NULL);
+				sprintf(msg.protocol, "M17");
+				msg.read = 0;
+
+				// dump to database
+				fprintf(stderr, "Message from %s: %s\n", msg.src, msg.message);
+				push_message(db_path, msg);
+
+				// prepare for display
+				strcpy(last_msg.src, msg.src);
+				strcpy(last_msg.dst, msg.dst);
+				strcpy(last_msg.text, msg.message);
+
+				// clear the struct for a new message
+				memset((uint8_t *)&msg, 0, sizeof(message_t));
+
+				// blink
+				// TODO: this is bad - blocking, fix it
+				/*linht_ctrl_green_led_set(true);
+				usleep(100e3);
+				linht_ctrl_green_led_set(false);*/
+
 				disp_state = DISP_MSG;
 				redraw_req = 1;
 			}
