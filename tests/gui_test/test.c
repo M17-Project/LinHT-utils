@@ -380,6 +380,130 @@ void displayMessage(const char *src, const char *dst, const char *msg)
 	DrawTextBoxed(customFont, msg, (Rectangle){2, 40, RES_X - 1 - 2, RES_Y - 1 - 2}, 14.0f, 0, true, WHITE);
 }
 
+static inline uint16_t rd_u16(const uint8_t *p)
+{
+	uint16_t v = ((uint16_t)p[0] << 8) | p[1];
+	return v;
+}
+
+static inline uint32_t rd_u32(const uint8_t *p)
+{
+	uint32_t v = ((uint32_t)p[0] << 24) |
+				 ((uint32_t)p[1] << 16) |
+				 ((uint32_t)p[2] << 8) |
+				 p[3];
+	return v;
+}
+
+// extract message data (SRC, DST, TYPE, META, SMS)
+void getMsgData(char *src, char *dst, uint16_t *type, uint8_t meta[14], char *msg, const uint8_t *buf, size_t len)
+{
+	uint16_t idx = 0;
+	uint32_t field_len = 0;
+	char key[16] = {0};
+
+	if (src != NULL)
+		src[0] = 0;
+	if (dst != NULL)
+		dst[0] = 0;
+	if (msg != NULL)
+		msg[0] = 0;
+	if (type != NULL)
+		*type = 0xFFFF;
+
+	// NOTE: the parser below is based on reverse-engineered PMT format...
+	while (idx < len - 1)
+	{
+		if (buf[idx] == 0x09) // 0x09 - PMT_PAIR
+		{
+			idx++;
+			// omit serialization depth marker byte
+			idx++;
+		}
+		else if (buf[idx] == 0x02) // 0x02 - PMT_SYMBOL
+		{
+			idx++;
+			field_len = rd_u16(&buf[idx]);
+			idx += 2;
+			memset(key, 0, field_len + 1); // +1 for the terminating null
+			memcpy(key, &buf[idx], field_len);
+			idx += field_len;
+			if (memcmp(key, "src", 3) == 0)
+			{
+				idx++; // omit the 0x02 byte for the value field of this pair
+				field_len = rd_u16(&buf[idx]);
+				idx += 2;
+				if (src != NULL)
+				{
+					memset(src, 0, field_len + 1); // +1 for the terminating null
+					memcpy(src, &buf[idx], field_len);
+				}
+				idx += field_len;
+			}
+			else if (memcmp(key, "dst", 3) == 0)
+			{
+				idx++; // omit the 0x02 byte for the value field of this pair
+				field_len = rd_u16(&buf[idx]);
+				idx += 2;
+				if (dst != NULL)
+				{
+					memset(dst, 0, field_len + 1); // +1 for the terminating null
+					memcpy(dst, &buf[idx], field_len);
+				}
+				idx += field_len;
+			}
+			else if (memcmp(key, "sms", 3) == 0)
+			{
+				idx++; // omit the 0x02 byte for the value field of this pair
+				field_len = rd_u16(&buf[idx]);
+				idx += 2;
+				if (msg != NULL)
+				{
+					memset(msg, 0, field_len + 1); // +1 for the terminating null
+					memcpy(msg, &buf[idx], field_len);
+				}
+				idx += field_len;
+			}
+			else if (memcmp(key, "type", 4) == 0)
+			{
+				idx++; // omit the 0x0A byte for the value field of this pair
+				idx++; // omit 1 byte
+				field_len = rd_u32(&buf[idx]);
+				idx += 4;
+				idx += 2; // omit 2 bytes
+				if (type != NULL)
+					*type = ((uint16_t)buf[idx] << 8) | buf[idx + 1]; // expected 2 bytes
+				idx += field_len;
+			}
+			else if (memcmp(key, "meta", 4) == 0)
+			{
+				idx++; // omit the 0x0A byte for the value field of this pair
+				idx++; // omit 1 byte
+				field_len = rd_u32(&buf[idx]);
+				idx += 4;
+				idx += 2; // omit 2 bytes
+				if (meta != NULL)
+					memcpy(meta, &buf[idx], field_len);
+				idx += field_len;
+			}
+			else // unexpected key
+			{
+				; // TODO: handle this properly
+			}
+		}
+	}
+
+	if (src != NULL)
+		if (src[0] == 0)
+			strcpy(src, "<unknown>");
+	if (dst != NULL)
+		if (dst[0] == 0)
+			strcpy(dst, "<unknown>");
+	if (msg != NULL)
+		if (msg[0] == 0)
+			strcpy(msg, "<empty>");
+}
+
 int main(void)
 {
 	// load settings
@@ -582,11 +706,7 @@ int main(void)
 			int len = zmq_recv(zmq_sub, buf, sizeof(buf), 0);
 			if (len > 0)
 			{
-				// TODO: parse real data here
-				strcpy(last_msg.src, "N0CALL");
-				strcpy(last_msg.dst, "@ALL");
-				sprintf(last_msg.text, "ZMQ PMT received, length: %d bytes.", len);
-
+				getMsgData(last_msg.src, last_msg.dst, NULL, NULL, last_msg.text, buf, len);
 				disp_state = DISP_MSG;
 				redraw_req = 1;
 			}
