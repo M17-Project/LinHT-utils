@@ -9,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <linux/fb.h>
 #include <time.h>
 #include <raylib.h>
@@ -138,7 +139,7 @@ Color bkg_color = BLACK;
 Color top_bar_color = {0x20, 0x20, 0x20, 0xFF};
 Color line_color = {0x60, 0x60, 0x60, 0xFF};
 time_t t;
-struct tm *time_info;
+struct tm time_info;
 char time_s[10], time_s_last[10];
 uint8_t gnss_display = 1, gnss_display_last;
 char bv[8], bv_last[8];
@@ -220,8 +221,9 @@ void kbd_cleanup(int fhandle)
 
 uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 {
-	pmt[0] = 2;									 // pmt type - zmq message
-	*((uint16_t *)&pmt[1]) = htons(strlen(msg)); // length
+	pmt[0] = 2;						 // pmt type - zmq message
+	uint16_t l = htons(strlen(msg)); // length
+	memcpy(&pmt[1], &l, sizeof(l));
 	strcpy((char *)&pmt[3], msg);
 
 	return 3 + strlen(msg);
@@ -392,7 +394,7 @@ static void DrawTextBoxed(Font font, const char *text, Rectangle rec, float font
 
 void displayMessage(const char *src, const char *dst, const char *msg)
 {
-	char src_line[10], dst_line[10];
+	char src_line[32], dst_line[32];
 
 	sprintf(src_line, "From: %s\n", src);
 	(void)dst;
@@ -437,6 +439,7 @@ void getMsgData(char *src, char *dst, uint16_t *type, uint8_t meta[14], char *ms
 		*type = 0xFFFF;
 
 	// NOTE: the parser below is based on reverse-engineered PMT format...
+	// TODO: fix it
 	while (idx < len - 1)
 	{
 		if (buf[idx] == 0x09) // 0x09 - PMT_PAIR
@@ -841,6 +844,7 @@ int main(void)
 
 		close(devnull); // close /dev/null
 
+		prctl(PR_SET_PDEATHSIG, SIGTERM);
 		execlp("python", "python",
 			   fg_path,
 			   "-o", offs_str,
@@ -1073,8 +1077,8 @@ int main(void)
 
 			// time display
 			t = time(NULL);
-			time_info = localtime(&t);
-			snprintf(time_s, sizeof(time_s), "%02d:%02d", time_info->tm_hour, time_info->tm_min);
+			localtime_r(&t, &time_info);
+			snprintf(time_s, sizeof(time_s), "%02d:%02d", time_info.tm_hour, time_info.tm_min);
 			if (strcmp(time_s, time_s_last))
 			{
 				strcpy(time_s_last, time_s);
