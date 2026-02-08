@@ -99,6 +99,10 @@ pid_t fg_pid;
 
 // messaging
 const char db_path[128] = "/var/lib/linht/messages.db";
+sqlite3 *msg_db;
+sqlite3_stmt *insert_msg_stmt;
+sqlite3_stmt *count_msg_stmt;
+sqlite3_stmt *unread_msg_count_stmt;
 
 typedef struct
 {
@@ -123,6 +127,10 @@ typedef struct message
 	bool read;
 } message_t;
 message_t msg;
+
+// files
+const char batt_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage1_raw";
+int batt_fd;
 
 // misc
 uint8_t redraw_req = 1;
@@ -522,18 +530,19 @@ void getMsgData(char *src, char *dst, uint16_t *type, uint8_t meta[14], char *ms
 }
 
 // message database handlers
-int db_init(const char *db_path)
+int db_init(sqlite3 **db, const char *db_path)
 {
-	sqlite3 *db;
-	char *err_msg = 0;
-	int retval;
+	char *err_msg = NULL;
 
-	retval = sqlite3_open(db_path, &db);
-	if (retval != SQLITE_OK)
+	if (sqlite3_open(db_path, db) != SQLITE_OK)
 	{
-		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(*db));
 		return 1;
 	}
+
+	sqlite3_busy_timeout(*db, 1000);
+	sqlite3_exec(*db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+	sqlite3_exec(*db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
 
 	const char *create_sql =
 		"CREATE TABLE IF NOT EXISTS messages ("
@@ -547,30 +556,11 @@ int db_init(const char *db_path)
 		"read INTEGER"
 		");";
 
-	retval = sqlite3_exec(db, create_sql, 0, 0, &err_msg);
-
-	if (retval != SQLITE_OK)
+	if (sqlite3_exec(*db, create_sql, NULL, NULL, &err_msg) != SQLITE_OK)
 	{
 		fprintf(stderr, "Failed to ensure table exists: %s\n", err_msg);
 		sqlite3_free(err_msg);
-		sqlite3_close(db);
-		return 1;
-	}
-
-	sqlite3_close(db);
-	return 0;
-}
-
-int push_message(const char *db_path, message_t msg)
-{
-	sqlite3 *db;
-	sqlite3_stmt *stmt;
-	int retval;
-
-	retval = sqlite3_open(db_path, &db);
-	if (retval != SQLITE_OK)
-	{
-		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+		sqlite3_close(*db);
 		return 1;
 	}
 
@@ -578,102 +568,95 @@ int push_message(const char *db_path, message_t msg)
 	const char *sql = "INSERT INTO messages (timestamp, protocol, source, destination, meta, message, read) "
 					  "VALUES (?, ?, ?, ?, ?, ?, ?);";
 
-	retval = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
-	if (retval != SQLITE_OK)
+	if (sqlite3_prepare_v2(*db, sql, -1, &insert_msg_stmt, 0) != SQLITE_OK)
 	{
-		fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
-		sqlite3_close(db);
+		fprintf(stderr, "Failed to prepare placeholder statement: %s\n", sqlite3_errmsg(*db));
+		sqlite3_close(*db);
 		return 1;
 	}
 
-	// bind values
-	sqlite3_bind_int64(stmt, 1, (sqlite3_int64)msg.timestamp);			   // timestamp (seconds since epoch)
-	sqlite3_bind_text(stmt, 2, msg.protocol, -1, SQLITE_STATIC);		   // protocol
-	sqlite3_bind_text(stmt, 3, msg.src, -1, SQLITE_STATIC);				   // source
-	sqlite3_bind_text(stmt, 4, msg.dst, -1, SQLITE_STATIC);				   // destination
-	sqlite3_bind_blob(stmt, 5, msg.meta, sizeof(msg.meta), SQLITE_STATIC); // meta
-	sqlite3_bind_text(stmt, 6, msg.message, -1, SQLITE_STATIC);			   // message
-	sqlite3_bind_int(stmt, 7, 0);										   // read flag (0 = unread)
+	// total message count
+	const char *sql2 = "SELECT COUNT(*) FROM messages;";
 
-	// execute
-	retval = sqlite3_step(stmt);
-	if (retval != SQLITE_DONE)
+	if (sqlite3_prepare_v2(*db, sql2, -1, &count_msg_stmt, 0) != SQLITE_OK)
 	{
-		fprintf(stderr, "Insert failed: %s\n", sqlite3_errmsg(db));
-		sqlite3_finalize(stmt);
-		sqlite3_close(db);
+		fprintf(stderr, "Failed to prepare count statement: %s\n", sqlite3_errmsg(*db));
 		return 1;
 	}
-	else
-	{
-		// printf("New message inserted.\n");
-	}
 
-	sqlite3_finalize(stmt);
-	sqlite3_close(db);
+	// unread message count
+	const char *sql3 = "SELECT COUNT(*) FROM messages WHERE read = 0;";
+
+	if (sqlite3_prepare_v2(*db, sql3, -1, &unread_msg_count_stmt, 0) != SQLITE_OK)
+	{
+		fprintf(stderr, "Failed to prepare unread count statement: %s\n", sqlite3_errmsg(*db));
+		return 1;
+	}
 
 	return 0;
 }
 
-int get_message_count(const char *db_path)
+void db_cleanup(void)
 {
-	sqlite3 *db;
-	sqlite3_stmt *stmt;
-	int retval, count = 0;
+	sqlite3_finalize(insert_msg_stmt);
+	sqlite3_finalize(count_msg_stmt);
+	sqlite3_finalize(unread_msg_count_stmt);
+	sqlite3_close(msg_db);
+}
 
-	retval = sqlite3_open(db_path, &db);
-	if (retval != SQLITE_OK)
+int push_message(message_t *msg)
+{
+	sqlite3_clear_bindings(insert_msg_stmt);
+
+	sqlite3_bind_int64(insert_msg_stmt, 1, (sqlite3_int64)msg->timestamp);				   // timestamp (seconds since epoch)
+	sqlite3_bind_text(insert_msg_stmt, 2, msg->protocol, -1, SQLITE_TRANSIENT);			   // protocol
+	sqlite3_bind_text(insert_msg_stmt, 3, msg->src, -1, SQLITE_TRANSIENT);				   // source
+	sqlite3_bind_text(insert_msg_stmt, 4, msg->dst, -1, SQLITE_TRANSIENT);				   // destination
+	sqlite3_bind_blob(insert_msg_stmt, 5, msg->meta, sizeof(msg->meta), SQLITE_TRANSIENT); // meta
+	sqlite3_bind_text(insert_msg_stmt, 6, msg->message, -1, SQLITE_TRANSIENT);			   // message
+	sqlite3_bind_int(insert_msg_stmt, 7, msg->read ? 1 : 0);							   // read flag (0 = unread)
+
+	int retval = sqlite3_step(insert_msg_stmt);
+	if (retval != SQLITE_DONE)
 	{
-		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
-		return -1;
+		fprintf(stderr, "Insert failed (retval=%d): %s\n", retval, sqlite3_errmsg(msg_db));
+		sqlite3_reset(insert_msg_stmt);
+		return 1;
 	}
 
-	retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages;", -1, &stmt, 0);
-	if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
-	{
-		count = sqlite3_column_int(stmt, 0);
-	}
+	sqlite3_reset(insert_msg_stmt);
+	return 0;
+}
+
+int get_message_count(void)
+{
+	int count = -1;
+
+	sqlite3_reset(count_msg_stmt);
+
+	int retval = sqlite3_step(count_msg_stmt);
+	if (retval == SQLITE_ROW)
+		count = sqlite3_column_int(count_msg_stmt, 0);
 	else
-	{
-		fprintf(stderr, "Query failed: %s\n", sqlite3_errmsg(db));
-		sqlite3_finalize(stmt);
-		sqlite3_close(db);
-		return -1;
-	}
+		fprintf(stderr, "Count query failed: %s\n", sqlite3_errmsg(msg_db));
 
-	sqlite3_finalize(stmt);
-	sqlite3_close(db);
+	sqlite3_reset(count_msg_stmt);
 	return count;
 }
 
-int get_unread_message_count(const char *db_path)
+int get_unread_message_count(void)
 {
-	sqlite3 *db;
-	sqlite3_stmt *stmt;
-	int retval, count = 0;
+	int count = -1;
 
-	retval = sqlite3_open(db_path, &db);
-	if (retval != SQLITE_OK)
-	{
-		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
-		return -1;
-	}
+	sqlite3_reset(unread_msg_count_stmt);
 
-	retval = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages WHERE read = 0;", -1, &stmt, 0);
-	if (retval == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW)
-	{
-		count = sqlite3_column_int(stmt, 0);
-	}
+	int retval = sqlite3_step(unread_msg_count_stmt);
+	if (retval == SQLITE_ROW)
+		count = sqlite3_column_int(unread_msg_count_stmt, 0);
 	else
-	{
-		fprintf(stderr, "Query failed: %s\n", sqlite3_errmsg(db));
-		sqlite3_finalize(stmt);
-		sqlite3_close(db);
-		return -1;
-	}
+		fprintf(stderr, "Unread count query failed: %s\n", sqlite3_errmsg(msg_db));
 
-	sqlite3_finalize(stmt);
-	sqlite3_close(db);
+	sqlite3_reset(unread_msg_count_stmt);
 	return count;
 }
 
@@ -735,6 +718,14 @@ int main(void)
 	linht_ctrl_green_led_set(false);
 	linht_ctrl_red_led_set(false);
 
+	// battery voltage
+	batt_fd = open(batt_volt, O_RDONLY | O_CLOEXEC);
+	if (batt_fd < 0)
+	{
+		fprintf(stderr, "Unable to perform battery voltage readout.\nExiting.\n");
+		return -1;
+	}
+
 	// SX1255 init and config
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
 	{
@@ -762,9 +753,7 @@ int main(void)
 	fprintf(stderr, "SX1255 setup finished\n");
 
 	// initialize text message database
-	db_init(db_path); // make sure an appropriate table in the DB exists
-
-	if (db_init(db_path) != 0)
+	if (db_init(&msg_db, db_path) != 0)
 	{
 		fprintf(stderr, "Database initialization failed. Check permissions or path.\n");
 	}
@@ -899,7 +888,7 @@ int main(void)
 
 					// dump to database
 					fprintf(stderr, "Message from %s: %s\n", msg.src, msg.message);
-					push_message(db_path, msg);
+					push_message(&msg);
 
 					// prepare for display
 					strcpy(last_msg.src, msg.src);
@@ -1052,28 +1041,21 @@ int main(void)
 		if (cnt % 200 == 0)
 		{
 			// battery voltage display
-			FILE *fp = fopen("/sys/bus/iio/devices/iio:device0/in_voltage1_raw", "r");
-			int value;
+			char buf[16] = {0};
+			lseek(batt_fd, 0, SEEK_SET);
+			int n = read(batt_fd, buf, sizeof(buf) - 1);
 			uint16_t batt_mv = 0;
 
-			if (!fp)
+			if (n > 0)
 			{
-				fprintf(stderr, "Failed to open IIO sysfs entry\n");
+				buf[n] = 0;
+				int value = atoi(buf);
+				batt_mv = (uint16_t)((float)value / 4096.0f * 1.8f * (39.0f + 10.0f) / 10.0f * 1000.0f);
+				snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv % 1000) / 100);
 			}
 			else
 			{
-				if (fscanf(fp, "%d", &value) == 1)
-				{
-					batt_mv = (uint16_t)(value / 4096.0 * 1.8 * (39.0 + 10.0) / 10.0 * 1000.0);
-					snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv % 1000) / 100);
-				}
-				else
-				{
-					snprintf(bv, sizeof(bv), "?.?");
-					fprintf(stderr, "Failed to read battery voltage\n");
-				}
-
-				fclose(fp);
+				snprintf(bv, sizeof(bv), "?.?");
 			}
 
 			if (batt_mv >= 7400)
@@ -1197,6 +1179,7 @@ int main(void)
 	zmq_close(zmq_pub);
 	zmq_ctx_destroy(zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
+	db_cleanup();
 	CloseWindow();
 	fprintf(stderr, "Cleanup done. Exiting.\n");
 
