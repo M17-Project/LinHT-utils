@@ -1,9 +1,9 @@
-.PHONY: all clean
+.PHONY: all install clean
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2
 LDFLAGS =
-LIBS    = -lraylib -lsx1255 -lzmq -llinht-ctrl -lcyaml -lsqlite3 -lm -lpthread -ldl -lrt
+LIBS    = -lm17 -lraylib -lsx1255 -lzmq -llinht-ctrl -lcyaml -lsqlite3 -lm -lpthread -ldl -lrt
 
 TARGET  = gui_test
 SRC     = test.c
@@ -16,6 +16,11 @@ $(TARGET): $(OBJ)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+install:
+	systemctl stop linht-gui-test
+	cp $(TARGET) /usr/bin
+	systemctl start linht-gui-test
 
 clean:
 	rm -f $(TARGET) $(OBJ)

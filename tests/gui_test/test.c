@@ -12,6 +12,7 @@
 #include <sys/prctl.h>
 #include <linux/fb.h>
 #include <time.h>
+#include <m17.h>
 #include <raylib.h>
 #include <linux/input.h>
 #include <zmq.h>
@@ -129,6 +130,16 @@ typedef struct message
 } message_t;
 message_t msg;
 
+// M17
+typedef struct
+{
+	char src[10];
+	char dst[10];
+	uint16_t type;
+	uint8_t meta[14];
+} m17_str_t;
+m17_str_t last_str;
+
 // files
 const char batt_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage1_raw";
 int batt_fd;
@@ -141,7 +152,8 @@ Color line_color = {0x60, 0x60, 0x60, 0xFF};
 time_t t;
 struct tm time_info;
 char time_s[10], time_s_last[10];
-uint8_t gnss_display = 1, gnss_display_last;
+uint8_t gnss_display, gnss_display_last;
+uint8_t disp_vfo_b, disp_aux_data = 1;
 char bv[8], bv_last[8];
 Color bv_col = WHITE;
 
@@ -911,6 +923,17 @@ int main(void)
 					disp_state = DISP_MSG;
 					redraw_req = 1;
 				}
+
+				// if it's a stream
+				else if (type & 1)
+				{
+					// extract data
+					strcpy(last_str.src, msg.src);
+					strcpy(last_str.dst, msg.dst);
+					memcpy(&last_str.type, &type, sizeof(type));
+					memcpy(last_str.meta, &msg.meta, sizeof(msg.meta));
+					redraw_req = 1;
+				}
 			}
 		}
 
@@ -1041,7 +1064,7 @@ int main(void)
 			redraw_req = 1;
 		}
 
-		// not so frequent checks - current time and battery voltage
+		// occassional checks - current time and battery voltage
 		if (cnt % 200 == 0)
 		{
 			// battery voltage display
@@ -1131,24 +1154,46 @@ int main(void)
 				DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
 				// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
 
-				// horizontal separating bar
-				DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
+				if (disp_vfo_b)
+				{
+					// horizontal separating bar
+					DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
 
-				// VFO B
-				DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
-				DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
-				DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
-				char freq_b_str[10];
-				uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
-				snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b % 1000000) / 1000);
-				DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
-				snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
-				DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
-				DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
-				DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
+					// VFO B
+					DrawTexture(texture[IMG_VFO_ACT], 2, 79, WHITE);
+					DrawTextEx(customFont, "B", (Vector2){4.5f, 78.0f}, 16.0f, 0, WHITE);
+					DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 94.0f}, 10.0f, 1, WHITE);
+					char freq_b_str[10];
+					uint32_t freq_b = vfo_b_tx ? vfo_b_tx_f : vfo_b_rx_f;
+					snprintf(freq_b_str, sizeof(freq_b_str), "%d.%03d", freq_b / 1000000, (freq_b % 1000000) / 1000);
+					DrawTextEx(customFont, freq_b_str, (Vector2){21.0f, 74.0f}, (float)customFont.baseSize, 0, WHITE);
+					snprintf(freq_b_str, sizeof(freq_b_str), "%02d", (freq_b % 1000) / 10);
+					DrawTextEx(customFont, freq_b_str, (Vector2){113.0f, 84.0f}, 16.0f, 0, WHITE);
+					DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 100.0f}, 12.0f, 1, BLUE);
+					DrawTextEx(customFont12, "127.3", (Vector2){50.0f, 100.0f}, 12.0f, 1, BLUE);
+					DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
+					DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
+					DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
+				}
+
+				if (disp_aux_data)
+				{
+					char line[64] = {0};
+					Color color;
+					if (((last_str.type >> 5) & 3) == 2) // ECD
+					{
+						decode_callsign_bytes(last_str.src, &last_str.meta[0]);
+						decode_callsign_bytes(last_str.dst, &last_str.meta[6]);
+						color = BLUE;
+					}
+					else
+					{
+						color = ORANGE;
+					}
+
+					sprintf(line, "LAST\nSRC: %s\nDST: %s", last_str.src, last_str.dst);
+					DrawTextEx(customFont12, line, (Vector2){21.0f, 78.0f}, 12.0f, 1, color);
+				}
 			}
 			else if (disp_state == DISP_MSG)
 			{
