@@ -1130,9 +1130,10 @@ int main(void)
 			if (gnss_display)
 				DrawTexture(texture[IMG_GNSS], RES_X - 40, 1, WHITE);
 
-			// battery voltage - icon or text
+			// battery voltage - icon or text (right-aligned)
 			// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
-			DrawTextEx(customFont, bv, (Vector2){RES_X - 20.0f, 2.0f}, 14.0f, 0, bv_col);
+			Vector2 size = MeasureTextEx(customFont, bv, 14.0f, 0);
+			DrawTextEx(customFont, bv, (Vector2){RES_X - size.x - 2.0f, 2.0f}, 14.0f, 0, bv_col);
 
 			if (disp_state == DISP_VFO)
 			{
@@ -1179,20 +1180,27 @@ int main(void)
 				if (disp_aux_data)
 				{
 					char line[64] = {0};
-					Color color;
-					if (((last_str.type >> 5) & 3) == 2) // ECD
+					Vector2 size;
+
+					// if SRC and DST fields are valid - display them
+					if (last_str.src[0] != 0 && last_str.dst[0] != 0)
 					{
-						decode_callsign_bytes(last_str.src, &last_str.meta[0]);
-						decode_callsign_bytes(last_str.dst, &last_str.meta[6]);
-						color = BLUE;
-					}
-					else
-					{
-						color = ORANGE;
+						sprintf(line, "%s  ->  %s", last_str.src, last_str.dst);
+						size = MeasureTextEx(customFont, line, 14.0f, 0);
+						DrawTextEx(customFont, line, (Vector2){(RES_X - size.x) / 2.0f, 78.0f}, 14.0f, 0, YELLOW);
 					}
 
-					sprintf(line, "LAST\nSRC: %s\nDST: %s", last_str.src, last_str.dst);
-					DrawTextEx(customFont12, line, (Vector2){21.0f, 78.0f}, 12.0f, 1, color);
+					// if ECD present, display it
+					if (((last_str.type >> 5) & 3) == 2)
+					{
+						char ext_src[10] = "", ext_dst[10] = "";
+
+						decode_callsign_bytes(ext_src, &last_str.meta[0]);
+						decode_callsign_bytes(ext_dst, &last_str.meta[6]);
+						sprintf(line, "%s  ->  %s", ext_src, ext_dst);
+						size = MeasureTextEx(customFont, line, 14.0f, 0);
+						DrawTextEx(customFont, line, (Vector2){(RES_X - size.x) / 2.0f, 98.0f}, 14.0f, 0, YELLOW);
+					}
 				}
 			}
 			else if (disp_state == DISP_MSG)
