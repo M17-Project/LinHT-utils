@@ -55,7 +55,7 @@ enum
 
 uint8_t disp_state = DISP_VFO;
 
-Font customFont, customFont10, customFont12;
+Font customFont, customFont10, customFont12, customFont38, customFont14;
 
 // settings
 const char *settings_file = "/usr/share/linht/settings.yaml";
@@ -143,12 +143,15 @@ m17_str_t last_str;
 // files
 const char batt_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage1_raw";
 int batt_fd;
+const char knob_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage0_raw";
+int knob_fd;
+uint8_t knob_pos;
 
 // misc
 uint8_t redraw_req = 1;
-Color bkg_color = BLACK;
-Color top_bar_color = {0x20, 0x20, 0x20, 0xFF};
-Color line_color = {0x60, 0x60, 0x60, 0xFF};
+const Color bkg_color = BLACK;
+const Color top_bar_color = {0x20, 0x20, 0x20, 0xFF};
+const Color line_color = {0x60, 0x60, 0x60, 0xFF};
 time_t t;
 struct tm time_info;
 char time_s[10], time_s_last[10];
@@ -741,6 +744,14 @@ int main(void)
 		return -1;
 	}
 
+	// volume knob position
+	knob_fd = open(knob_volt, O_RDONLY | O_CLOEXEC);
+	if (knob_fd < 0)
+	{
+		fprintf(stderr, "Unable to perform volume knob voltage readout.\nExiting.\n");
+		return -1;
+	}	
+
 	// SX1255 init and config
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
 	{
@@ -826,6 +837,8 @@ int main(void)
 	customFont = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 28, 0, 250);
 	customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
 	customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
+	customFont14 = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 14, 0, 250);
+	customFont38 = LoadFontEx("/usr/share/linht/fonts/Ubuntu-Regular.ttf", 38, 0, 250);
 
 	// load images
 	load_gfx();
@@ -1064,13 +1077,33 @@ int main(void)
 			redraw_req = 1;
 		}
 
+		// less critical checks
+		char buf[16] = {0};
+		if (cnt % 20 == 0)
+		{
+			// volume knob position
+			lseek(knob_fd, 0, SEEK_SET);
+			n = read(knob_fd, buf, sizeof(buf) - 1);
+
+			if (n > 0)
+			{
+				buf[n] = 0;
+				int value = atoi(buf);
+				uint8_t tmp = (uint8_t)(255.0f * value / 3000.0f); // 3000 is slightly more than maximum
+				if (abs(knob_pos-tmp) > 5) // reduce wiggle
+				{
+					knob_pos = tmp;
+					redraw_req = 1;
+				}
+			}
+		}
+
 		// occassional checks - current time and battery voltage
 		if (cnt % 200 == 0)
 		{
 			// battery voltage display
-			char buf[16] = {0};
 			lseek(batt_fd, 0, SEEK_SET);
-			int n = read(batt_fd, buf, sizeof(buf) - 1);
+			n = read(batt_fd, buf, sizeof(buf) - 1);
 			uint16_t batt_mv = 0;
 
 			if (n > 0)
@@ -1078,15 +1111,15 @@ int main(void)
 				buf[n] = 0;
 				int value = atoi(buf);
 				batt_mv = (uint16_t)((float)value / 4096.0f * 1.8f * (39.0f + 10.0f) / 10.0f * 1000.0f);
-				snprintf(bv, sizeof(bv), "%d.%d", batt_mv / 1000, (batt_mv % 1000) / 100);
+				snprintf(bv, sizeof(bv), "%d.%dV", batt_mv / 1000, (batt_mv % 1000) / 100);
 			}
 			else
 			{
-				snprintf(bv, sizeof(bv), "?.?");
+				snprintf(bv, sizeof(bv), "?.?V");
 			}
 
 			if (batt_mv >= 7400)
-				bv_col = WHITE;
+				bv_col = GREEN;
 			else if (batt_mv >= 7000)
 				bv_col = ORANGE;
 			else
@@ -1124,7 +1157,7 @@ int main(void)
 			DrawLine(0, 17, RES_X - 1, 17, line_color);
 
 			// top to bottom, left to right (more or less)
-			DrawTextEx(customFont, time_s, (Vector2){2, 2}, 14, 0, WHITE);
+			DrawTextEx(customFont14, time_s, (Vector2){2, 2}, 14, 0, RAYWHITE);
 
 			// GNSS
 			if (gnss_display)
@@ -1133,29 +1166,37 @@ int main(void)
 			// battery voltage - icon or text (right-aligned)
 			// DrawTexture(texture[IMG_BATT_100], RES_X - 24, 2, WHITE);
 			Vector2 size = MeasureTextEx(customFont, bv, 14.0f, 0);
-			DrawTextEx(customFont, bv, (Vector2){RES_X - size.x - 2.0f, 2.0f}, 14.0f, 0, bv_col);
+			DrawTextEx(customFont14, bv, (Vector2){RES_X - size.x - 2.0f, 2.0f}, 14.0f, 0, bv_col);
 
 			if (disp_state == DISP_VFO)
 			{
 				// VFO A
-				DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
-				DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
-				DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
-				char freq_a_str[10];
-				uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
-				snprintf(freq_a_str, sizeof(freq_a_str), "%d.%03d", freq_a / 1000000, (freq_a % 1000000) / 1000);
-				DrawTextEx(customFont, freq_a_str, (Vector2){21.0f, 18.0f}, (float)customFont.baseSize, 0, vfo_a_tx ? RED : WHITE);
-				snprintf(freq_a_str, sizeof(freq_a_str), "%02d", (freq_a % 1000) / 10);
-				DrawTextEx(customFont, freq_a_str, (Vector2){113.0f, 28.0f}, 16.0f, 0, vfo_a_tx ? RED : WHITE);
-				DrawTextEx(customFont12, "12.5k", (Vector2){21.0f, 44.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, "", (Vector2){50.0f, 44.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, "", (Vector2){79.0f, 44.0f}, 12.0f, 1, BLUE);
-				DrawTextEx(customFont12, conf->channels.vfo_0.extra.mode, (Vector2){21.0f, 56.0f}, 12.0f, 1, GREEN);
-				DrawTextEx(customFont12, conf->channels.vfo_0.extra.dst, (Vector2){50.0f, 56.0f}, 12.0f, 1, GREEN);
-				DrawTextEx(customFont12, "CAN 0", (Vector2){108.0f, 56.0f}, 12.0f, 1, GREEN);
+				//DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
+				//DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
+				//DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
+
+				float width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.mode, 14.0f, 1).x;
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.mode, (Vector2){(RES_X/4-width/2), 20.0f}, 14.0f, 1, BLUE);
+				char can_line[8]; sprintf(can_line, "CAN %d", conf->channels.vfo_0.extra.can);
+				width = MeasureTextEx(customFont14, can_line, 14.0f, 1).x;
+				DrawTextEx(customFont14, can_line, (Vector2){RES_X/4-width/2, 34.0f}, 14.0f, 1, BLUE);
+
+				width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.src, 14.0f, 1).x;
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.src, (Vector2){(3*RES_X/4-width/2), 20.0f}, 14.0f, 1, BLUE);
+				width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.dst, 14.0f, 1).x;
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.dst, (Vector2){3*RES_X/4-width/2, 34.0f}, 14.0f, 1, BLUE);
 				// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
 
-				if (disp_vfo_b)
+				char freq_a_str_1[10];
+				char freq_a_str_2[3];
+				uint32_t freq_a = vfo_a_tx ? vfo_a_tx_f : vfo_a_rx_f;
+				snprintf(freq_a_str_1, sizeof(freq_a_str_1), "%d.%03d", freq_a / 1000000, (freq_a % 1000000) / 1000);
+				snprintf(freq_a_str_2, sizeof(freq_a_str_2), "%02d", (freq_a % 1000) / 10);
+				width = MeasureTextEx(customFont38, freq_a_str_1, 38.0f, 0).x + 2 + MeasureTextEx(customFont, freq_a_str_2, 28.0f, 0).x;
+				DrawTextEx(customFont38, freq_a_str_1, (Vector2){(RES_X-width)/2.0f, 45.0f}, 38.0f, 0, vfo_a_tx ? RED : (Color){230,230,230,255});
+				DrawTextEx(customFont, freq_a_str_2, (Vector2){(RES_X-width)/2.0f + MeasureTextEx(customFont38, freq_a_str_1, 38.0f, 0).x + 2, 53.0f}, 28.0f, 0, vfo_a_tx ? RED : (Color){230,230,230,255});
+
+				/*if (disp_vfo_b)
 				{
 					// horizontal separating bar
 					DrawLine(0, 74, RES_X - 1, 74, (Color){0x60, 0x60, 0x60, 0xFF});
@@ -1175,7 +1216,7 @@ int main(void)
 					DrawTextEx(customFont12, "-7.6M", (Vector2){79.0f, 100.0f}, 12.0f, 1, BLUE);
 					DrawTextEx(customFont12, "FM", (Vector2){21.0f, 112.0f}, 12.0f, 1, GREEN);
 					DrawTexture(texture[IMG_MUTE], 140, 84, WHITE); //'vfo b mute' icon
-				}
+				}*/
 
 				if (disp_aux_data)
 				{
@@ -1185,23 +1226,31 @@ int main(void)
 					// if SRC and DST fields are valid - display them
 					if (last_str.src[0] != 0 && last_str.dst[0] != 0)
 					{
-						sprintf(line, "%s  ->  %s", last_str.src, last_str.dst);
-						size = MeasureTextEx(customFont, line, 14.0f, 0);
-						DrawTextEx(customFont, line, (Vector2){(RES_X - size.x) / 2.0f, 78.0f}, 14.0f, 0, YELLOW);
+						sprintf(line, "%s", last_str.src);
+						size = MeasureTextEx(customFont14, line, 14.0f, 0);
+						DrawTextEx(customFont14, line, (Vector2){(RES_X/4 - size.x/2), 81.0f}, 14.0f, 0, MAGENTA);
+						sprintf(line, "%s", last_str.dst);
+						size = MeasureTextEx(customFont14, line, 14.0f, 0);
+						DrawTextEx(customFont14, line, (Vector2){(RES_X/4 - size.x/2), 95.0f}, 14.0f, 0, MAGENTA);
 					}
 
 					// if ECD present, display it
 					if (((last_str.type >> 5) & 3) == 2)
 					{
 						char ext_src[10] = "", ext_dst[10] = "";
-
 						decode_callsign_bytes(ext_src, &last_str.meta[0]);
 						decode_callsign_bytes(ext_dst, &last_str.meta[6]);
-						sprintf(line, "%s  ->  %s", ext_src, ext_dst);
-						size = MeasureTextEx(customFont, line, 14.0f, 0);
-						DrawTextEx(customFont, line, (Vector2){(RES_X - size.x) / 2.0f, 98.0f}, 14.0f, 0, YELLOW);
+
+						sprintf(line, "%s", ext_src);
+						size = MeasureTextEx(customFont14, line, 14.0f, 0);
+						DrawTextEx(customFont14, line, (Vector2){3*RES_X/4 - size.x/2, 81.0f}, 14.0f, 0, MAGENTA);
+						sprintf(line, "%s", ext_dst);
+						size = MeasureTextEx(customFont14, line, 14.0f, 0);
+						DrawTextEx(customFont14, line, (Vector2){3*RES_X/4 - size.x/2, 95.0f}, 14.0f, 0, MAGENTA);
 					}
 				}
+
+				DrawRectangle(2, RES_Y-2-2, 2 + knob_pos/255.0f * (RES_X-4-2), 2, GRAY);
 			}
 			else if (disp_state == DISP_MSG)
 			{
