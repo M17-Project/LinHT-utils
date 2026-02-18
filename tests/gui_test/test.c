@@ -83,8 +83,9 @@ const uint16_t key_seq_1[11] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
 								KEY_ENTER, KEY_ESC, KEY_2};
 
 // ZeroMQ and PMT
-const char *zmq_ipc = "ipc:///tmp/ptt_msg";
-const char *aux_ipc = "ipc:///tmp/fg_aux_data_out";
+const char *ptt_ipc = "ipc:///tmp/ptt_msg";
+const char *aux_fg_in_ipc = "ipc:///tmp/fg_aux_data_in";
+const char *aux_fg_out_ipc = "ipc:///tmp/fg_aux_data_out";
 
 uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
@@ -792,14 +793,31 @@ int main(void)
 
 	// ZeroMQ and PMT
 	void *zmq_ctx = zmq_ctx_new();
-	void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
-	if (zmq_bind(zmq_pub, zmq_ipc) != 0)
+	// PTT control (SOT/EOT for the ZMQ proxy)
+	void *zmq_ptt_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+
+	if (zmq_bind(zmq_ptt_pub, ptt_ipc) != 0)
 	{
-		fprintf(stderr, "ZeroMQ: Error binding to Unix socket %s.\nExiting.\n", zmq_ipc);
+		fprintf(stderr, "ZeroMQ: Error binding to Unix socket %s.\nExiting.\n", ptt_ipc);
 		return -1;
 	}
 
+	// audx data _to_ GR flowgraph (SMS for the M17 Encoder etc.)
+	void *zmq_fg_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+	if (!zmq_fg_pub)
+	{
+		fprintf(stderr, "ZeroMQ: Error spawning a PUB socket.\nExiting.\n");
+		return -1;
+	}
+
+	if (zmq_connect(zmq_fg_pub, aux_fg_in_ipc) != 0)
+	{
+		fprintf(stderr, "ZeroMQ: Cannot connect to %s.\nExiting.\n", aux_fg_in_ipc);
+		return -1;
+	}
+
+	// aux data _from_ GR flowgraph
 	void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
 	if (!zmq_sub)
 	{
@@ -809,23 +827,14 @@ int main(void)
 
 	zmq_setsockopt(zmq_sub, ZMQ_SUBSCRIBE, "", 0);
 
-	if (zmq_connect(zmq_sub, aux_ipc) != 0)
+	if (zmq_connect(zmq_sub, aux_fg_out_ipc) != 0)
 	{
-		fprintf(stderr, "ZeroMQ: Cannot connect to %s.\nExiting.\n", aux_ipc);
+		fprintf(stderr, "ZeroMQ: Cannot connect to %s.\nExiting.\n", aux_fg_out_ipc);
 		return -1;
 	}
 
 	pmt_len = string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
-
-	// config TX sustain time
-	// this should be done per VFO
-	// but we assume we use only VFO A
-	char sust_time[16] = {0};
-	uint8_t sust_pmt[24] = {0};
-	snprintf(sust_time, sizeof(sust_time), "SUST%d", vfo_a_tx_sust);
-	uint8_t sust_pmt_len = string_to_pmt(sust_pmt, sust_time);
-	zmq_send(zmq_pub, sust_pmt, sust_pmt_len, 0);
 
 	// init Raylib
 	fprintf(stderr, "Initializing Raylib...\n");
@@ -965,7 +974,8 @@ int main(void)
 						sx1255_pa_enable(true);
 						linht_ctrl_tx_rx_switch_set(false);
 						linht_ctrl_red_led_set(true);
-						zmq_send(zmq_pub, sot_pmt, pmt_len, 0);
+						zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
+						zmq_send(zmq_fg_pub, sot_pmt, pmt_len, 0); // notify the GR flowgraph
 						vfo_a_tx = true;
 						fprintf(stderr, "PTT pressed\n");
 						redraw_req = 1;
@@ -995,7 +1005,32 @@ int main(void)
 				}
 				else if (ev.code == KEY_LEFT)
 				{
-					;
+					// test SMS code
+					sx1255_enable_rx(false);
+					sx1255_pa_enable(true);
+					linht_ctrl_tx_rx_switch_set(false);
+					linht_ctrl_red_led_set(true);
+
+					// transmission start
+					zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
+
+					// "SMS":"msg" PMT pair
+					uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
+					char msg[800] = "Test message!";
+					memcpy(&pmt[10], msg, strlen(msg));
+					uint16_t l = htons(strlen(msg)); // length
+					memcpy(&pmt[8], &l, sizeof(l));
+					zmq_send(zmq_fg_pub, pmt, 8 + 2 + l, 0);
+
+					usleep(((3 + (1+strlen(msg)+1+2)/25) * 40 + 20) * 1000); // 20ms extra
+
+					// transmission end
+					zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
+
+					sx1255_enable_rx(true);
+					sx1255_pa_enable(false);
+					linht_ctrl_tx_rx_switch_set(true);
+					linht_ctrl_red_led_set(false);
 				}
 				else if (ev.code == KEY_RIGHT)
 				{
@@ -1036,10 +1071,11 @@ int main(void)
 				{
 					if (disp_state == DISP_VFO)
 					{
-						zmq_send(zmq_pub, eot_pmt, pmt_len, 0);
+						zmq_send(zmq_fg_pub, eot_pmt, pmt_len, 0); // notify the GR flowgraph
 						// we assume VFO A is being used
 						// this is blocking - might be bad :)
 						usleep(vfo_a_tx_sust * 1000);
+						zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
 
 						sx1255_enable_rx(true);
 						sx1255_pa_enable(false);
@@ -1277,12 +1313,14 @@ int main(void)
 	UnloadFont(customFont);
 	UnloadFont(customFont10);
 	UnloadFont(customFont12);
+	UnloadFont(customFont38);
+	UnloadFont(customFont14);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
 	kill(fg_pid, SIGTERM); // kill FG
 	waitpid(fg_pid, NULL, 0);
-	zmq_unbind(zmq_pub, zmq_ipc);
-	zmq_close(zmq_pub);
+	zmq_unbind(zmq_ptt_pub, ptt_ipc);
+	zmq_close(zmq_ptt_pub);
 	zmq_ctx_destroy(zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
 	db_cleanup();
