@@ -28,7 +28,7 @@ void *zmq_ptt_sub;
 uint8_t sot_pmt[10], eot_pmt[10];
 
 struct timeval tv_start, tv_now;
-int64_t t_sust = 4*40e3;	//default sustain time in microseconds (4 M17 frames)
+//int64_t t_sust = 4*40e3;	//default sustain time in microseconds (4 M17 frames)
 
 typedef enum
 {
@@ -202,12 +202,12 @@ int main(void)
 				fprintf(stderr, "PTT released\n");
 				gettimeofday(&tv_start, NULL);
 			}
-			else if (strncmp((char*)&pmt_buff[3], "SUST", 4) == 0)
+			/*else if (strncmp((char*)&pmt_buff[3], "SUST", 4) == 0)
 			{
 				int32_t val = atoi((char*)&pmt_buff[7]);
 				t_sust = (int64_t)val * 1000;
 				fprintf(stderr, "Setting sustain time to %d ms\n", val);
-			}
+			}*/
 			else
 			{
 				fprintf(stderr, "Unrecognized PMT message\n");
@@ -308,7 +308,7 @@ int main(void)
 			}
 
 			// check if the "tx sustain" time has elapsed
-			if (tv_start.tv_sec != 0)
+			/*if (tv_start.tv_sec != 0)
 			{
 				gettimeofday(&tv_now, NULL);
 				if (time_diff_us(tv_now, tv_start) >= t_sust)
@@ -317,7 +317,7 @@ int main(void)
 					fprintf(stderr, " TX sustain time elapsed\n");
 					tv_start.tv_sec = 0;
 				}
-			}
+			}*/
 		}
 	}
 	
