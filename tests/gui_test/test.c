@@ -27,6 +27,8 @@
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
 
+#define arrlen(x) (sizeof(x)/sizeof(*x))
+
 // GFX
 #define RES_X 160
 #define RES_Y 128
@@ -78,11 +80,16 @@ uint16_t cnt;
 const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
 uint16_t last_pressed[12];
-const uint16_t key_seq_1[11] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
+const uint16_t key_seq_1[] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
 								KEY_LEFT, KEY_RIGHT, KEY_LEFT, KEY_RIGHT,
 								KEY_ENTER, KEY_ESC, KEY_2};
 
 // ZeroMQ and PMT
+void *zmq_ctx;
+void *zmq_ptt_pub;
+void *zmq_fg_pub;
+void *zmq_sub;
+
 const char *ptt_ipc = "ipc:///tmp/ptt_msg";
 const char *aux_fg_in_ipc = "ipc:///tmp/fg_aux_data_in";
 const char *aux_fg_out_ipc = "ipc:///tmp/fg_aux_data_out";
@@ -679,6 +686,35 @@ int get_unread_message_count(void)
 	return count;
 }
 
+// messaging
+void m17_send_sms(const char *msg)
+{
+	sx1255_enable_rx(false);
+	sx1255_pa_enable(true);
+	linht_ctrl_tx_rx_switch_set(false);
+	linht_ctrl_red_led_set(true);
+
+	// transmission start
+	zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
+
+	// "SMS":"msg" PMT pair
+	uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
+	memcpy(&pmt[10], msg, strlen(msg)); // TODO: add 821-char limit
+	uint16_t l = htons(strlen(msg)); // length
+	memcpy(&pmt[8], &l, sizeof(l));
+	zmq_send(zmq_fg_pub, pmt, 8 + 2 + l, 0); // trigger baseband generation
+
+	usleep(((3 + (1+strlen(msg)+1+2)/25) * 40 + 20) * 1000); // 20ms extra
+
+	// transmission end
+	zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
+
+	sx1255_enable_rx(true);
+	sx1255_pa_enable(false);
+	linht_ctrl_tx_rx_switch_set(true);
+	linht_ctrl_red_led_set(false);
+}
+
 int main(void)
 {
 	// load settings
@@ -792,10 +828,10 @@ int main(void)
 	}
 
 	// ZeroMQ and PMT
-	void *zmq_ctx = zmq_ctx_new();
+	zmq_ctx = zmq_ctx_new();
 
 	// PTT control (SOT/EOT for the ZMQ proxy)
-	void *zmq_ptt_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+	zmq_ptt_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
 	if (zmq_bind(zmq_ptt_pub, ptt_ipc) != 0)
 	{
@@ -804,7 +840,7 @@ int main(void)
 	}
 
 	// audx data _to_ GR flowgraph (SMS for the M17 Encoder etc.)
-	void *zmq_fg_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
+	zmq_fg_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 	if (!zmq_fg_pub)
 	{
 		fprintf(stderr, "ZeroMQ: Error spawning a PUB socket.\nExiting.\n");
@@ -818,7 +854,7 @@ int main(void)
 	}
 
 	// aux data _from_ GR flowgraph
-	void *zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
+	zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
 	if (!zmq_sub)
 	{
 		fprintf(stderr, "ZeroMQ: Error spawning a SUB socket.\nExiting.\n");
@@ -1005,32 +1041,7 @@ int main(void)
 				}
 				else if (ev.code == KEY_LEFT)
 				{
-					// test SMS code
-					sx1255_enable_rx(false);
-					sx1255_pa_enable(true);
-					linht_ctrl_tx_rx_switch_set(false);
-					linht_ctrl_red_led_set(true);
-
-					// transmission start
-					zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
-
-					// "SMS":"msg" PMT pair
-					uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
-					char msg[800] = "Test message!";
-					memcpy(&pmt[10], msg, strlen(msg));
-					uint16_t l = htons(strlen(msg)); // length
-					memcpy(&pmt[8], &l, sizeof(l));
-					zmq_send(zmq_fg_pub, pmt, 8 + 2 + l, 0);
-
-					usleep(((3 + (1+strlen(msg)+1+2)/25) * 40 + 20) * 1000); // 20ms extra
-
-					// transmission end
-					zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
-
-					sx1255_enable_rx(true);
-					sx1255_pa_enable(false);
-					linht_ctrl_tx_rx_switch_set(true);
-					linht_ctrl_red_led_set(false);
+					;
 				}
 				else if (ev.code == KEY_RIGHT)
 				{
@@ -1047,18 +1058,22 @@ int main(void)
 						redraw_req = 1;
 					}
 				}
+				else if (ev.code == KEY_0)
+				{
+					m17_send_sms("Test message!");
+				}
 				else
 				{
 					;
 				}
 
 				// remember last pressed keys
-				for (uint8_t i = 0; i < 11; i++)
+				for (uint8_t i = 0; i < arrlen(last_pressed)-1; i++)
 					last_pressed[i] = last_pressed[i + 1];
-				last_pressed[11] = ev.code;
+				last_pressed[arrlen(last_pressed)-1] = ev.code;
 
 				// check against a secret combination :)
-				if (memcmp((uint8_t *)&last_pressed[12 - 11], (uint8_t *)key_seq_1, sizeof(key_seq_1)) == 0)
+				if (memcmp(&last_pressed[arrlen(last_pressed) - arrlen(key_seq_1)], key_seq_1, sizeof(key_seq_1)) == 0)
 				{
 					fprintf(stderr, "Shutting down now.\n");
 					system("shutdown now");
