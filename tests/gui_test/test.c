@@ -699,7 +699,8 @@ void m17_send_sms(const char *msg)
 
 	// transmission start
 	zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
-
+	usleep(50 * 1000); // let the proxy switch
+	
 	// "SMS":"msg" PMT pair
 	uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
 	memcpy(&pmt[10], msg, strlen(msg)); // TODO: add 821-char limit
