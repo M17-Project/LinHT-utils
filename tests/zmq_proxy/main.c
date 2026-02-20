@@ -27,7 +27,7 @@ void *zmq_ptt_sub;
 
 uint8_t sot_pmt[10], eot_pmt[10];
 
-struct timeval tv_start, tv_now;
+//struct timeval tv_start, tv_now;
 //int64_t t_sust = 4*40e3;	//default sustain time in microseconds (4 M17 frames)
 
 typedef enum
@@ -74,6 +74,8 @@ void tx_stop_cleanup(void)
 	snd_pcm_prepare(bsb_tx);   	// reset TX device for next use
 	snd_pcm_drop(bsb_rx);      	// stop device
 	snd_pcm_prepare(bsb_rx);   	// reset device
+
+	snd_pcm_start(bsb_rx);
 	
 	// switch state
 	radio_state = STATE_RX;
@@ -200,7 +202,8 @@ int main(void)
 			else if (memcmp(pmt_buff, eot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT released\n");
-				gettimeofday(&tv_start, NULL);
+				tx_stop_cleanup();
+				//gettimeofday(&tv_start, NULL);
 			}
 			/*else if (strncmp((char*)&pmt_buff[3], "SUST", 4) == 0)
 			{
