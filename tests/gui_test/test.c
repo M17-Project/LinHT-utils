@@ -27,7 +27,7 @@
 #define KEY_PRESS 0
 #define KEY_RELEASE 1
 
-#define arrlen(x) (sizeof(x)/sizeof(*x))
+#define arrlen(x) (sizeof(x) / sizeof(*x))
 
 // GFX
 #define RES_X 160
@@ -60,7 +60,9 @@ uint8_t disp_state = DISP_VFO;
 Font customFont, customFont10, customFont12, customFont38, customFont14;
 
 // settings
+config_t *conf;
 const char *settings_file = "/usr/share/linht/settings.yaml";
+char offs_str[24], can_str[4]; // for M17
 
 // return value
 int rval;
@@ -81,8 +83,8 @@ const char *kbd_path = "/dev/input/event0";
 int kbd; // keyboard file handle
 uint16_t last_pressed[12];
 const uint16_t key_seq_1[] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
-								KEY_LEFT, KEY_RIGHT, KEY_LEFT, KEY_RIGHT,
-								KEY_ENTER, KEY_ESC, KEY_2};
+							  KEY_LEFT, KEY_RIGHT, KEY_LEFT, KEY_RIGHT,
+							  KEY_ENTER, KEY_ESC, KEY_2};
 
 // ZeroMQ and PMT
 void *zmq_ctx;
@@ -105,6 +107,7 @@ time_t esc_start;
 bool esc_pressed = false;
 
 // spawning flowgraphs (python)
+char *fg_path;
 pid_t fg_pid;
 
 // messaging
@@ -700,11 +703,11 @@ void m17_send_sms(const char *msg)
 	// "SMS":"msg" PMT pair
 	uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
 	memcpy(&pmt[10], msg, strlen(msg)); // TODO: add 821-char limit
-	uint16_t l = htons(strlen(msg)); // length
+	uint16_t l = htons(strlen(msg));	// length
 	memcpy(&pmt[8], &l, sizeof(l));
 	zmq_send(zmq_fg_pub, pmt, 8 + 2 + l, 0); // trigger baseband generation
 
-	usleep(((3 + (1+strlen(msg)+1+2)/25) * 40 + 20) * 1000); // 20ms extra
+	usleep(((3 + (1 + strlen(msg) + 1 + 2) / 25) * 40 + 20) * 1000); // 20ms extra
 
 	// transmission end
 	zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
@@ -713,6 +716,64 @@ void m17_send_sms(const char *msg)
 	sx1255_pa_enable(false);
 	linht_ctrl_tx_rx_switch_set(true);
 	linht_ctrl_red_led_set(false);
+}
+
+void fg_check(void)
+{
+	if (fg_pid <= 0)
+		return;
+
+	int status;
+	pid_t r = waitpid(fg_pid, &status, WNOHANG);
+
+	if (r == 0)
+		return; // still running
+
+	if (r == -1)
+		return; // error or already reaped
+
+	// if it died - resurrect it
+	// re-set RF hardware to RX mode
+	sx1255_pa_enable(false);
+	sx1255_enable_rx(true);
+	linht_ctrl_tx_rx_switch_set(true);
+	linht_ctrl_red_led_set(false);
+	vfo_a_tx = false;
+
+	fprintf(stderr, "Flowgraph stopped");
+
+	if (WIFSIGNALED(status))
+		fprintf(stderr, " (signal %d)", WTERMSIG(status));
+
+	if (WIFEXITED(status))
+		fprintf(stderr, " (exit %d)", WEXITSTATUS(status));
+
+	fprintf(stderr, "\nRestarting...\n");
+
+	usleep(100 * 1000); // prevent aggressive restart loops
+
+	// restart
+	fg_pid = fork();
+	if (fg_pid == 0)
+	{
+		int devnull = open("/dev/null", O_WRONLY);
+		dup2(devnull, STDOUT_FILENO);
+		dup2(devnull, STDERR_FILENO);
+		close(devnull);
+
+		prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+		execlp("python", "python",
+			   conf->channels.vfo_0.fg,
+			   "-o", offs_str,
+			   "-S", conf->channels.vfo_0.extra.src,
+			   "-D", conf->channels.vfo_0.extra.dst,
+			   "-C", can_str,
+			   (char *)NULL);
+
+		fprintf(stderr, "Failed to execute GNU Radio flowgraph\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
 int main(void)
@@ -724,7 +785,6 @@ int main(void)
 			.mem_fn = cyaml_mem,
 		};
 
-	config_t *conf = NULL;
 	cyaml_err_t err = cyaml_load_file(settings_file, &cfg, &config_schema, (cyaml_data_t **)&conf, NULL);
 	if (err != CYAML_OK)
 	{
@@ -787,7 +847,7 @@ int main(void)
 	{
 		fprintf(stderr, "Unable to perform volume knob voltage readout.\nExiting.\n");
 		return -1;
-	}	
+	}
 
 	// SX1255 init and config
 	if (sx1255_init(spi_device, gpio_chip_path, rst_pin_offset) != 0)
@@ -892,10 +952,9 @@ int main(void)
 	SetTargetFPS(15);
 
 	// execute FG, TODO: the parameters are only OK for M17 FG
-	char *fg_path = conf->channels.vfo_0.fg;
+	fg_path = conf->channels.vfo_0.fg;
 	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
 
-	char offs_str[24], can_str[4];
 	snprintf(offs_str, sizeof(offs_str), "%.4f+%.4fj", conf->settings.rf.i_dc, conf->settings.rf.q_dc);
 	snprintf(can_str, sizeof(can_str), "%d", conf->channels.vfo_0.extra.can);
 
@@ -937,6 +996,9 @@ int main(void)
 	// main loop
 	while (!WindowShouldClose())
 	{
+		// check if the flowgraph is still running
+		fg_check();
+
 		// poll for terminal events even if no redrawing is required
 		PollInputEvents();
 
@@ -1011,7 +1073,7 @@ int main(void)
 						linht_ctrl_tx_rx_switch_set(false);
 						linht_ctrl_red_led_set(true);
 						zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
-						zmq_send(zmq_fg_pub, sot_pmt, pmt_len, 0); // notify the GR flowgraph
+						zmq_send(zmq_fg_pub, sot_pmt, pmt_len, 0);	// notify the GR flowgraph
 						vfo_a_tx = true;
 						fprintf(stderr, "PTT pressed\n");
 						redraw_req = 1;
@@ -1068,9 +1130,9 @@ int main(void)
 				}
 
 				// remember last pressed keys
-				for (uint8_t i = 0; i < arrlen(last_pressed)-1; i++)
+				for (uint8_t i = 0; i < arrlen(last_pressed) - 1; i++)
 					last_pressed[i] = last_pressed[i + 1];
-				last_pressed[arrlen(last_pressed)-1] = ev.code;
+				last_pressed[arrlen(last_pressed) - 1] = ev.code;
 
 				// check against a secret combination :)
 				if (memcmp(&last_pressed[arrlen(last_pressed) - arrlen(key_seq_1)], key_seq_1, sizeof(key_seq_1)) == 0)
@@ -1141,7 +1203,7 @@ int main(void)
 				buf[n] = 0;
 				int value = atoi(buf);
 				uint8_t tmp = (uint8_t)(255.0f * value / 3000.0f); // 3000 is slightly more than maximum
-				if (abs(knob_pos-tmp) > 5) // reduce wiggle
+				if (abs(knob_pos - tmp) > 5)					   // reduce wiggle
 				{
 					knob_pos = tmp;
 					redraw_req = 1;
@@ -1149,7 +1211,7 @@ int main(void)
 			}
 		}
 
-		// occassional checks - current time and battery voltage
+		// occasional checks - current time and battery voltage
 		if (cnt % 200 == 0)
 		{
 			// battery voltage display
@@ -1222,20 +1284,21 @@ int main(void)
 			if (disp_state == DISP_VFO)
 			{
 				// VFO A
-				//DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
-				//DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
-				//DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
+				// DrawTexture(texture[IMG_VFO_ACT], 2, 23, WHITE);
+				// DrawTextEx(customFont, "A", (Vector2){4.5f, 22.0f}, 16.0f, 0, WHITE);
+				// DrawTextEx(customFont10, "VFO", (Vector2){3.0f, 38.0f}, 10.0f, 1, WHITE);
 
 				float width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.mode, 14.0f, 1).x;
-				DrawTextEx(customFont14, conf->channels.vfo_0.extra.mode, (Vector2){(RES_X/4-width/2), 20.0f}, 14.0f, 1, BLUE);
-				char can_line[8]; sprintf(can_line, "CAN %d", conf->channels.vfo_0.extra.can);
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.mode, (Vector2){(RES_X / 4 - width / 2), 20.0f}, 14.0f, 1, BLUE);
+				char can_line[8];
+				sprintf(can_line, "CAN %d", conf->channels.vfo_0.extra.can);
 				width = MeasureTextEx(customFont14, can_line, 14.0f, 1).x;
-				DrawTextEx(customFont14, can_line, (Vector2){RES_X/4-width/2, 34.0f}, 14.0f, 1, BLUE);
+				DrawTextEx(customFont14, can_line, (Vector2){RES_X / 4 - width / 2, 34.0f}, 14.0f, 1, BLUE);
 
 				width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.src, 14.0f, 1).x;
-				DrawTextEx(customFont14, conf->channels.vfo_0.extra.src, (Vector2){(3*RES_X/4-width/2), 20.0f}, 14.0f, 1, BLUE);
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.src, (Vector2){(3 * RES_X / 4 - width / 2), 20.0f}, 14.0f, 1, BLUE);
 				width = MeasureTextEx(customFont14, conf->channels.vfo_0.extra.dst, 14.0f, 1).x;
-				DrawTextEx(customFont14, conf->channels.vfo_0.extra.dst, (Vector2){3*RES_X/4-width/2, 34.0f}, 14.0f, 1, BLUE);
+				DrawTextEx(customFont14, conf->channels.vfo_0.extra.dst, (Vector2){3 * RES_X / 4 - width / 2, 34.0f}, 14.0f, 1, BLUE);
 				// DrawTexture(texture[IMG_MUTE], 140, 28, WHITE); //'vfo a mute' icon
 
 				char freq_a_str_1[10];
@@ -1244,8 +1307,8 @@ int main(void)
 				snprintf(freq_a_str_1, sizeof(freq_a_str_1), "%d.%03d", freq_a / 1000000, (freq_a % 1000000) / 1000);
 				snprintf(freq_a_str_2, sizeof(freq_a_str_2), "%02d", (freq_a % 1000) / 10);
 				width = MeasureTextEx(customFont38, freq_a_str_1, 38.0f, 0).x + 2 + MeasureTextEx(customFont, freq_a_str_2, 28.0f, 0).x;
-				DrawTextEx(customFont38, freq_a_str_1, (Vector2){(RES_X-width)/2.0f, 45.0f}, 38.0f, 0, vfo_a_tx ? RED : (Color){230,230,230,255});
-				DrawTextEx(customFont, freq_a_str_2, (Vector2){(RES_X-width)/2.0f + MeasureTextEx(customFont38, freq_a_str_1, 38.0f, 0).x + 2, 53.0f}, 28.0f, 0, vfo_a_tx ? RED : (Color){230,230,230,255});
+				DrawTextEx(customFont38, freq_a_str_1, (Vector2){(RES_X - width) / 2.0f, 45.0f}, 38.0f, 0, vfo_a_tx ? RED : (Color){230, 230, 230, 255});
+				DrawTextEx(customFont, freq_a_str_2, (Vector2){(RES_X - width) / 2.0f + MeasureTextEx(customFont38, freq_a_str_1, 38.0f, 0).x + 2, 53.0f}, 28.0f, 0, vfo_a_tx ? RED : (Color){230, 230, 230, 255});
 
 				/*if (disp_vfo_b)
 				{
@@ -1279,10 +1342,10 @@ int main(void)
 					{
 						sprintf(line, "%s", last_str.src);
 						size = MeasureTextEx(customFont14, line, 14.0f, 0);
-						DrawTextEx(customFont14, line, (Vector2){(RES_X/4 - size.x/2), 81.0f}, 14.0f, 0, MAGENTA);
+						DrawTextEx(customFont14, line, (Vector2){(RES_X / 4 - size.x / 2), 81.0f}, 14.0f, 0, MAGENTA);
 						sprintf(line, "%s", last_str.dst);
 						size = MeasureTextEx(customFont14, line, 14.0f, 0);
-						DrawTextEx(customFont14, line, (Vector2){(RES_X/4 - size.x/2), 95.0f}, 14.0f, 0, MAGENTA);
+						DrawTextEx(customFont14, line, (Vector2){(RES_X / 4 - size.x / 2), 95.0f}, 14.0f, 0, MAGENTA);
 					}
 
 					// if ECD present, display it
@@ -1294,14 +1357,14 @@ int main(void)
 
 						sprintf(line, "%s", ext_src);
 						size = MeasureTextEx(customFont14, line, 14.0f, 0);
-						DrawTextEx(customFont14, line, (Vector2){3*RES_X/4 - size.x/2, 81.0f}, 14.0f, 0, MAGENTA);
+						DrawTextEx(customFont14, line, (Vector2){3 * RES_X / 4 - size.x / 2, 81.0f}, 14.0f, 0, MAGENTA);
 						sprintf(line, "%s", ext_dst);
 						size = MeasureTextEx(customFont14, line, 14.0f, 0);
-						DrawTextEx(customFont14, line, (Vector2){3*RES_X/4 - size.x/2, 95.0f}, 14.0f, 0, MAGENTA);
+						DrawTextEx(customFont14, line, (Vector2){3 * RES_X / 4 - size.x / 2, 95.0f}, 14.0f, 0, MAGENTA);
 					}
 				}
 
-				DrawRectangle(2, RES_Y-2-2, 2 + knob_pos/255.0f * (RES_X-4-2), 2, GRAY);
+				DrawRectangle(2, RES_Y - 2 - 2, 2 + knob_pos / 255.0f * (RES_X - 4 - 2), 2, GRAY);
 			}
 			else if (disp_state == DISP_MSG)
 			{
