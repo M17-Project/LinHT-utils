@@ -12,7 +12,9 @@
 
 #define LOOP_TICK_MS              10UL
 #define DEBOUNCE_TICKS            4U
+#ifndef STARTUP_3V3_DELAY_MS
 #define STARTUP_3V3_DELAY_MS      3000UL
+#endif
 #define USB_BOOT_HOLD_MS          5000UL
 #define SHUTDOWN_TIMEOUT_MS       20000UL
 #define ON_OUT_PULSE_MS           200UL
@@ -266,7 +268,6 @@ int main(void)
     init_pin(&PIN_SOM_RST);
 
     all_outputs_safe_off();
-
     on_sw_db.state = on_switch_is_high();
     on_sw_db.integrator = on_sw_db.state ? DEBOUNCE_TICKS : 0U;
     side_btn_db.state = read_pin(&PIN_SIDE_BTN);
@@ -306,7 +307,9 @@ int main(void)
 
         switch (state) {
         case DEV_OFF:
-            set_pin_pullup(&PIN_SIDE_BTN, true);
+            /* Rev.B workaround: do not enable PB5 pull-up.
+             * set_pin_pullup(&PIN_SIDE_BTN, true);
+             */
             usb_boot_assert(false);
             on_out_assert(false);
             usb_boot_latched = false;
@@ -318,7 +321,16 @@ int main(void)
             }
 
             if (on_sw_falling && on_switch_fall_armed) {
-                const bool usb_boot_request = !side_btn_db.state || side_btn_pressed();
+                /* Rev.B workaround:
+                 * SIDE_BTN (PB5) is shared with SoM GPIO3_IO[22] and reads ~0.7V in OFF state
+                 * due to line loading/clamping. That causes false LOW detection and accidental
+                 * USB boot requests. Keep USB boot request disabled in Rev.B firmware.
+                 * Re-enable after HW fix in Rev.C.
+                 */
+                /* Original logic (keep for Rev.C):
+                 * const bool usb_boot_request = !side_btn_db.state || side_btn_pressed();
+                 */
+                const bool usb_boot_request = false;
 
                 on_switch_fall_armed = false;
                 enable_5v(true);
@@ -336,7 +348,9 @@ int main(void)
             break;
 
         case DEV_STARTUP_WAIT_3V3:
-            set_pin_pullup(&PIN_SIDE_BTN, false);
+            /* Rev.B workaround: keep PB5 pull-up disabled.
+             * set_pin_pullup(&PIN_SIDE_BTN, false);
+             */
             if (usb_boot_latched && timer_expired(now_ms, usb_boot_release_deadline)) {
                 usb_boot_assert(false);
                 usb_boot_latched = false;
@@ -356,7 +370,9 @@ int main(void)
             break;
 
         case DEV_RUNNING:
-            set_pin_pullup(&PIN_SIDE_BTN, false);
+            /* Rev.B workaround: keep PB5 pull-up disabled.
+             * set_pin_pullup(&PIN_SIDE_BTN, false);
+             */
             if (off_req_db.state) {
                 off_req_seen_high = true;
             }
@@ -384,7 +400,9 @@ int main(void)
             break;
 
         case DEV_SHUTDOWN_WAIT:
-            set_pin_pullup(&PIN_SIDE_BTN, false);
+            /* Rev.B workaround: keep PB5 pull-up disabled.
+             * set_pin_pullup(&PIN_SIDE_BTN, false);
+             */
             if (off_req_db.state) {
                 off_req_seen_high = true;
             }
