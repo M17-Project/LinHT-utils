@@ -873,7 +873,18 @@ int main(void)
 	sx1255_enable_rx(true);
 	sx1255_enable_tx(true);
 	sx1255_pa_enable(false);
+
+    // Init and set Attenuators
+	linht_ctrl_atten_init();
+	linht_ctrl_atten_set(1, 0.0);
+    linht_ctrl_atten_set(2, 0.0);
+
+	// Disable PA on startup
+	linht_ctrl_pa_enable_set(false);
+
+	// Set to RF Switch to RX
 	linht_ctrl_tx_rx_switch_set(true);
+
 	fprintf(stderr, "SX1255 setup finished\n");
 
 	// initialize text message database
@@ -1071,7 +1082,7 @@ int main(void)
 					{
 						sx1255_enable_rx(false);
 						sx1255_pa_enable(true);
-						linht_ctrl_tx_rx_switch_set(false);
+						linht_ctrl_tx_rx_switch_set(false); // TX
 						linht_ctrl_red_led_set(true);
 						zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
 						zmq_send(zmq_fg_pub, sot_pmt, pmt_len, 0);	// notify the GR flowgraph
@@ -1157,7 +1168,7 @@ int main(void)
 
 						sx1255_enable_rx(true);
 						sx1255_pa_enable(false);
-						linht_ctrl_tx_rx_switch_set(true);
+						linht_ctrl_tx_rx_switch_set(true); // RX
 						linht_ctrl_red_led_set(false);
 						vfo_a_tx = false;
 						fprintf(stderr, "PTT released\n");
@@ -1388,7 +1399,7 @@ int main(void)
 	// cleanup
 	fprintf(stderr, "Exit code caught. Cleaning up...\n");
 	for (uint8_t i = 0; i < IMG_COUNT; i++)
-		UnloadTexture(texture[i]);
+	UnloadTexture(texture[i]);
 	UnloadFont(customFont);
 	UnloadFont(customFont10);
 	UnloadFont(customFont12);
@@ -1396,6 +1407,11 @@ int main(void)
 	UnloadFont(customFont14);
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
+
+	linht_ctrl_atten_cleanup(); // Cleanup attenuator control
+	linht_ctrl_pa_enable_set(false); // Disable PA
+	linht_ctrl_tx_rx_switch_set(true); // RX
+	
 	kill(fg_pid, SIGTERM); // kill FG
 	waitpid(fg_pid, NULL, 0);
 	zmq_unbind(zmq_ptt_pub, ptt_ipc);
