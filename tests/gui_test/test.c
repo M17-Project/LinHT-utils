@@ -694,7 +694,7 @@ void m17_send_sms(const char *msg)
 {
 	sx1255_enable_rx(false);
 	sx1255_pa_enable(true);
-	linht_ctrl_tx_rx_switch_set(false);
+	linht_ctrl_tx_rx_switch_set(true);
 	linht_ctrl_red_led_set(true);
 
 	// transmission start
@@ -715,7 +715,7 @@ void m17_send_sms(const char *msg)
 
 	sx1255_enable_rx(true);
 	sx1255_pa_enable(false);
-	linht_ctrl_tx_rx_switch_set(true);
+	linht_ctrl_tx_rx_switch_set(false);
 	linht_ctrl_red_led_set(false);
 }
 
@@ -737,7 +737,7 @@ void fg_check(void)
 	// re-set RF hardware to RX mode
 	sx1255_pa_enable(false);
 	sx1255_enable_rx(true);
-	linht_ctrl_tx_rx_switch_set(true);
+	linht_ctrl_tx_rx_switch_set(false);
 	linht_ctrl_red_led_set(false);
 	vfo_a_tx = false;
 
@@ -883,7 +883,7 @@ int main(void)
 	linht_ctrl_pa_enable_set(false);
 
 	// Set to RF Switch to RX
-	linht_ctrl_tx_rx_switch_set(true);
+	linht_ctrl_tx_rx_switch_set(false);
 
 	fprintf(stderr, "SX1255 setup finished\n");
 
@@ -1082,7 +1082,7 @@ int main(void)
 					{
 						sx1255_enable_rx(false);
 						sx1255_pa_enable(true);
-						linht_ctrl_tx_rx_switch_set(false); // TX
+						linht_ctrl_tx_rx_switch_set(true); // TX
 						linht_ctrl_red_led_set(true);
 						zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
 						zmq_send(zmq_fg_pub, sot_pmt, pmt_len, 0);	// notify the GR flowgraph
@@ -1168,7 +1168,7 @@ int main(void)
 
 						sx1255_enable_rx(true);
 						sx1255_pa_enable(false);
-						linht_ctrl_tx_rx_switch_set(true); // RX
+						linht_ctrl_tx_rx_switch_set(false); // RX
 						linht_ctrl_red_led_set(false);
 						vfo_a_tx = false;
 						fprintf(stderr, "PTT released\n");
@@ -1410,7 +1410,7 @@ int main(void)
 
 	linht_ctrl_atten_cleanup(); // Cleanup attenuator control
 	linht_ctrl_pa_enable_set(false); // Disable PA
-	linht_ctrl_tx_rx_switch_set(true); // RX
+	linht_ctrl_tx_rx_switch_set(false); // RX
 	
 	kill(fg_pid, SIGTERM); // kill FG
 	waitpid(fg_pid, NULL, 0);
