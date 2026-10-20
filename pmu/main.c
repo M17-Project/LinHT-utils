@@ -1,443 +1,159 @@
 #ifndef F_CPU
 #define F_CPU 1000000UL
 #endif
-
-#include <stdbool.h>
-#include <stdint.h>
+#if F_CPU != 1000000UL
+#error "PMU requires a 1 MHz CPU clock (16 MHz oscillator, /16 prescaler)"
+#endif
 
 #include <avr/cpufunc.h>
+#include <avr/interrupt.h>
 #include <avr/io.h>
+#include <avr/sleep.h>
 #include <avr/wdt.h>
-#include <util/delay.h>
+#include <util/atomic.h>
 
-#define LOOP_TICK_MS              10UL
-#define DEBOUNCE_TICKS            4U
-#ifndef STARTUP_3V3_DELAY_MS
-#define STARTUP_3V3_DELAY_MS      3000UL
-#endif
-#define USB_BOOT_HOLD_MS          5000UL
-#define SHUTDOWN_TIMEOUT_MS       20000UL
-#define ON_OUT_PULSE_MS           200UL
-#define WATCHDOG_PERIOD           WDT_PERIOD_2KCLK_gc
+#include "pmu.h"
 
-typedef struct {
-    PORT_t *port;
-    volatile uint8_t *vport_in;
-    uint8_t bitmask;
-    bool output;
-    bool initial_high;
-    bool pullup;
-} gpio_pin_t;
+/* PORTA: PA0 UPDI; PA1 OFF_REQ_N; PA2 switch; PA3 USB_BOOT;
+ * PA4 SoM reset (Hi-Z); PA5 ON_OUT_N; PA6 5V EN; PA7 3V3 EN.
+ * PB5 physical button; PC0 open-drain button output to the 1.8 V SoM.
+ */
+static volatile uint32_t uptime_ms;
+static volatile bool side_forwarding;
+static bool side_pullup_enabled;
 
-typedef struct {
-    uint8_t integrator;
-    bool state;
-} debounce_t;
-
-typedef enum {
-    DEV_OFF = 0,
-    DEV_STARTUP_WAIT_3V3,
-    DEV_RUNNING,
-    DEV_SHUTDOWN_WAIT,
-} dev_state_t;
-
-static const gpio_pin_t PIN_ON_SWITCH = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN2_bm,
-    .output = false, .initial_high = false, .pullup = true,
-};
-
-static const gpio_pin_t PIN_OFF_REQ_N = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN1_bm,
-    .output = false, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_SIDE_BTN = {
-    .port = &PORTB, .vport_in = &VPORTB.IN, .bitmask = PIN5_bm,
-    .output = false, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_USB_BOOT = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN3_bm,
-    .output = false, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_5V_ON_REQ = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN6_bm,
-    .output = true, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_3V3_ON_REQ = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN7_bm,
-    .output = true, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_5V_ON_OUT_N = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN5_bm,
-    .output = false, .initial_high = false, .pullup = false,
-};
-
-static const gpio_pin_t PIN_SOM_RST = {
-    .port = &PORTA, .vport_in = &VPORTA.IN, .bitmask = PIN4_bm,
-    .output = false, .initial_high = false, .pullup = false,
-};
-
-static volatile uint8_t *pin_ctrl_reg(const gpio_pin_t *pin)
+static inline void side_release(void)
 {
-    switch (pin->bitmask) {
-    case PIN0_bm: return &pin->port->PIN0CTRL;
-    case PIN1_bm: return &pin->port->PIN1CTRL;
-    case PIN2_bm: return &pin->port->PIN2CTRL;
-    case PIN3_bm: return &pin->port->PIN3CTRL;
-    case PIN4_bm: return &pin->port->PIN4CTRL;
-    case PIN5_bm: return &pin->port->PIN5CTRL;
-    case PIN6_bm: return &pin->port->PIN6CTRL;
-    default:      return &pin->port->PIN7CTRL;
-    }
+    PORTC.DIRCLR = PIN0_bm;
 }
 
-static void set_pin_pullup(const gpio_pin_t *pin, bool enabled)
+static inline void side_forward(void)
 {
-    volatile uint8_t *ctrl = pin_ctrl_reg(pin);
-
-    if (enabled) {
-        *ctrl = (*ctrl & ~PORT_PULLUPEN_bm) | PORT_PULLUPEN_bm;
+    /* PC0 OUT is always zero; never enable its pull-up or drive it HIGH. */
+    if (VPORTB.IN & PIN5_bm) {
+        side_release();
     } else {
-        *ctrl &= (uint8_t)~PORT_PULLUPEN_bm;
+        PORTC.DIRSET = PIN0_bm;
     }
 }
 
-static void init_pin(const gpio_pin_t *pin)
+ISR(PORTB_PORT_vect)
 {
-    set_pin_pullup(pin, pin->pullup);
+    PORTB.INTFLAGS = PIN5_bm;
+    if (side_forwarding) {
+        side_forward();
+    }
+}
 
-    if (pin->output) {
-        if (pin->initial_high) {
-            pin->port->OUTSET = pin->bitmask;
-        } else {
-            pin->port->OUTCLR = pin->bitmask;
+ISR(TCB0_INT_vect)
+{
+    TCB0.INTFLAGS = TCB_CAPT_bm;
+    uptime_ms++;
+}
+
+static void init_hardware(void)
+{
+    /* Set output latches before directions. Hardware EN pulldowns keep rails off
+     * during reset and programming. Keep every connection to the SoM Hi-Z.
+     */
+    PORTA.OUTCLR = PIN3_bm | PIN5_bm | PIN6_bm | PIN7_bm;
+    PORTA.DIRCLR = PIN1_bm | PIN2_bm | PIN3_bm | PIN4_bm | PIN5_bm;
+    PORTA.DIRSET = PIN6_bm | PIN7_bm;
+    PORTA.PIN2CTRL = PORT_PULLUPEN_bm;
+    PORTB.DIRCLR = PIN5_bm;
+    PORTB.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
+    PORTC.OUTCLR = PIN0_bm;
+    PORTC.DIRCLR = PIN0_bm;
+    PORTC.PIN0CTRL = PORT_ISC_INPUT_DISABLE_gc;
+
+    _PROTECTED_WRITE(CLKCTRL.MCLKCTRLB, CLKCTRL_PDIV_16X_gc | CLKCTRL_PEN_bm);
+
+    /* Fuses enable and lock the 8K watchdog at reset. Use the same period if
+     * running on an MCU whose watchdog has not yet been enabled by fuses.
+     */
+    while (WDT.STATUS & WDT_SYNCBUSY_bm) {}
+    if (!(WDT.STATUS & WDT_LOCK_bm)) {
+        _PROTECTED_WRITE(WDT.CTRLA, WDT_PERIOD_8KCLK_gc);
+    }
+    wdt_reset();
+
+    /* Hardware timebase: 1 MHz / 1000 = 1 kHz. */
+    TCB0.CTRLB = TCB_CNTMODE_INT_gc;
+    TCB0.CCMP = (F_CPU / 1000UL) - 1UL;
+    TCB0.INTFLAGS = TCB_CAPT_bm;
+    TCB0.INTCTRL = TCB_CAPT_bm;
+    TCB0.CTRLA = TCB_CLKSEL_DIV1_gc | TCB_ENABLE_bm;
+}
+
+static void apply_outputs(const pmu_outputs_t *out)
+{
+    /* Disable consumers before removing the SoM supply. */
+    if (!out->rail_3v3) PORTA.OUTCLR = PIN7_bm;
+    if (!out->rail_5v) PORTA.OUTCLR = PIN6_bm;
+
+    /* The boot strap must be valid BEFORE the 5 V enable edge. */
+    if (out->usb_boot) {
+        PORTA.OUTSET = PIN3_bm;
+        PORTA.DIRSET = PIN3_bm;
+    } else {
+        PORTA.DIRCLR = PIN3_bm;
+    }
+
+    if (out->on_out_low) {
+        PORTA.DIRSET = PIN5_bm;
+    } else {
+        PORTA.DIRCLR = PIN5_bm;
+    }
+
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        if (out->side_pullup != side_pullup_enabled) {
+            side_pullup_enabled = out->side_pullup;
+            PORTB.PIN5CTRL = out->side_pullup
+                ? PORT_PULLUPEN_bm : PORT_ISC_INPUT_DISABLE_gc;
         }
-        pin->port->DIRSET = pin->bitmask;
-    } else {
-        pin->port->DIRCLR = pin->bitmask;
-    }
-}
-
-static inline bool read_pin(const gpio_pin_t *pin)
-{
-    return ((*pin->vport_in) & pin->bitmask) != 0U;
-}
-
-static inline void drive_high(const gpio_pin_t *pin)
-{
-    pin->port->OUTSET = pin->bitmask;
-    pin->port->DIRSET = pin->bitmask;
-}
-
-static inline void drive_low(const gpio_pin_t *pin)
-{
-    pin->port->OUTCLR = pin->bitmask;
-    pin->port->DIRSET = pin->bitmask;
-}
-
-static inline void float_input(const gpio_pin_t *pin)
-{
-    pin->port->DIRCLR = pin->bitmask;
-}
-
-static inline bool debounce_update(debounce_t *db, bool sample)
-{
-    bool changed = false;
-
-    if (sample) {
-        if (db->integrator < DEBOUNCE_TICKS) {
-            db->integrator++;
-        }
-    } else {
-        if (db->integrator > 0U) {
-            db->integrator--;
+        if (out->side_forward != side_forwarding) {
+            side_forwarding = out->side_forward;
+            PORTB.INTFLAGS = PIN5_bm;
+            PORTB.PIN5CTRL = out->side_forward
+                ? PORT_PULLUPEN_bm | PORT_ISC_BOTHEDGES_gc
+                : (out->side_pullup ? PORT_PULLUPEN_bm : PORT_ISC_INPUT_DISABLE_gc);
+            if (out->side_forward) side_forward();
+            else side_release();
         }
     }
 
-    if ((db->integrator == 0U) && db->state) {
-        db->state = false;
-        changed = true;
-    } else if ((db->integrator >= DEBOUNCE_TICKS) && !db->state) {
-        db->state = true;
-        changed = true;
-    }
-
-    return changed;
-}
-
-static inline bool timer_expired(uint32_t now_ms, uint32_t deadline_ms)
-{
-    return ((int32_t)(now_ms - deadline_ms)) >= 0;
-}
-
-static inline void enable_5v(bool on)
-{
-    if (on) {
-        drive_high(&PIN_5V_ON_REQ);
-    } else {
-        drive_low(&PIN_5V_ON_REQ);
-    }
-}
-
-static inline void enable_3v3(bool on)
-{
-    if (on) {
-        drive_high(&PIN_3V3_ON_REQ);
-    } else {
-        drive_low(&PIN_3V3_ON_REQ);
-    }
-}
-
-static inline void usb_boot_assert(bool active)
-{
-    if (active) {
-        drive_high(&PIN_USB_BOOT);
-    } else {
-        float_input(&PIN_USB_BOOT);
-    }
-}
-
-static inline void on_out_assert(bool active)
-{
-    if (active) {
-        drive_low(&PIN_5V_ON_OUT_N);
-    } else {
-        float_input(&PIN_5V_ON_OUT_N);
-    }
-}
-
-static void all_outputs_safe_off(void)
-{
-    enable_3v3(false);
-    enable_5v(false);
-    usb_boot_assert(false);
-    on_out_assert(false);
-}
-
-static inline bool on_switch_is_high(void)
-{
-    return read_pin(&PIN_ON_SWITCH);
-}
-
-static inline bool side_btn_pressed(void)
-{
-    return !read_pin(&PIN_SIDE_BTN);
-}
-
-static void watchdog_enable_runtime(void)
-{
-    CCP = CCP_IOREG_gc;
-    WDT.CTRLA = WATCHDOG_PERIOD;
-}
-
-static void clock_init_1mhz(void)
-{
-    CCP = CCP_IOREG_gc;
-    CLKCTRL.MCLKCTRLB = CLKCTRL_PDIV_16X_gc | CLKCTRL_PEN_bm;
+    if (out->rail_5v) PORTA.OUTSET = PIN6_bm;
+    if (out->rail_3v3) PORTA.OUTSET = PIN7_bm;
 }
 
 int main(void)
 {
-    uint32_t now_ms = 0UL;
-    uint32_t startup_3v3_deadline = 0UL;
-    uint32_t usb_boot_release_deadline = 0UL;
-    uint32_t shutdown_deadline = 0UL;
-    uint32_t on_out_release_deadline = 0UL;
+    pmu_t pmu;
+    uint32_t previous_ms = 0;
 
-    bool usb_boot_latched = false;
-    bool on_out_asserted_flag = false;
-    bool on_switch_fall_armed;
-    bool off_req_seen_high = false;
+    init_hardware();
+    pmu_init(&pmu, 0, !(VPORTA.IN & PIN2_bm));
+    apply_outputs(&pmu.out);
+    set_sleep_mode(SLEEP_MODE_IDLE);
+    sei();
 
-    debounce_t on_sw_db;
-    debounce_t side_btn_db;
-    debounce_t off_req_db;
-    dev_state_t state = DEV_OFF;
-
-    init_pin(&PIN_ON_SWITCH);
-    init_pin(&PIN_OFF_REQ_N);
-    init_pin(&PIN_SIDE_BTN);
-    init_pin(&PIN_USB_BOOT);
-    init_pin(&PIN_5V_ON_REQ);
-    init_pin(&PIN_3V3_ON_REQ);
-    init_pin(&PIN_5V_ON_OUT_N);
-    init_pin(&PIN_SOM_RST);
-
-    all_outputs_safe_off();
-    on_sw_db.state = on_switch_is_high();
-    on_sw_db.integrator = on_sw_db.state ? DEBOUNCE_TICKS : 0U;
-    side_btn_db.state = read_pin(&PIN_SIDE_BTN);
-    side_btn_db.integrator = side_btn_db.state ? DEBOUNCE_TICKS : 0U;
-    off_req_db.state = read_pin(&PIN_OFF_REQ_N);
-    off_req_db.integrator = off_req_db.state ? DEBOUNCE_TICKS : 0U;
-
-    on_switch_fall_armed = on_sw_db.state;
-
-    clock_init_1mhz();
-    watchdog_enable_runtime();
-
-    while (1) {
-        bool on_sw_changed;
-        bool side_changed;
-        bool off_req_changed;
-        bool on_sw_rising = false;
-        bool on_sw_falling = false;
-        bool off_req_falling = false;
-
-        _delay_ms(LOOP_TICK_MS);
-        now_ms += LOOP_TICK_MS;
-
-        on_sw_changed = debounce_update(&on_sw_db, on_switch_is_high());
-        side_changed = debounce_update(&side_btn_db, read_pin(&PIN_SIDE_BTN));
-        off_req_changed = debounce_update(&off_req_db, read_pin(&PIN_OFF_REQ_N));
-        (void)side_changed;
-
-        if (on_sw_changed) {
-            on_sw_rising = on_sw_db.state;
-            on_sw_falling = !on_sw_db.state;
+    for (;;) {
+        uint32_t now;
+        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+            now = uptime_ms;
         }
-
-        if (off_req_changed) {
-            off_req_falling = !off_req_db.state;
+        if (now != previous_ms) {
+            pmu_inputs_t in = {
+                .switch_on = !(VPORTA.IN & PIN2_bm),
+                .side_pressed = side_pullup_enabled && !(VPORTB.IN & PIN5_bm),
+                .off_req_n = (VPORTA.IN & PIN1_bm) != 0,
+            };
+            previous_ms = now;
+            pmu_step(&pmu, now, in);
+            apply_outputs(&pmu.out);
+            wdt_reset();
         }
-
-        switch (state) {
-        case DEV_OFF:
-            /* Rev.B workaround: do not enable PB5 pull-up.
-             * set_pin_pullup(&PIN_SIDE_BTN, true);
-             */
-            usb_boot_assert(false);
-            on_out_assert(false);
-            usb_boot_latched = false;
-            on_out_asserted_flag = false;
-            off_req_seen_high = false;
-
-            if (on_sw_db.state) {
-                on_switch_fall_armed = true;
-            }
-
-            if (on_sw_falling && on_switch_fall_armed) {
-                /* Rev.B workaround:
-                 * SIDE_BTN (PB5) is shared with SoM GPIO3_IO[22] and reads ~0.7V in OFF state
-                 * due to line loading/clamping. That causes false LOW detection and accidental
-                 * USB boot requests. Keep USB boot request disabled in Rev.B firmware.
-                 * Re-enable after HW fix in Rev.C.
-                 */
-                /* Original logic (keep for Rev.C):
-                 * const bool usb_boot_request = !side_btn_db.state || side_btn_pressed();
-                 */
-                const bool usb_boot_request = false;
-
-                on_switch_fall_armed = false;
-                enable_5v(true);
-                enable_3v3(false);
-
-                if (usb_boot_request) {
-                    usb_boot_assert(true);
-                    usb_boot_latched = true;
-                    usb_boot_release_deadline = now_ms + USB_BOOT_HOLD_MS;
-                }
-
-                startup_3v3_deadline = now_ms + STARTUP_3V3_DELAY_MS;
-                state = DEV_STARTUP_WAIT_3V3;
-            }
-            break;
-
-        case DEV_STARTUP_WAIT_3V3:
-            /* Rev.B workaround: keep PB5 pull-up disabled.
-             * set_pin_pullup(&PIN_SIDE_BTN, false);
-             */
-            if (usb_boot_latched && timer_expired(now_ms, usb_boot_release_deadline)) {
-                usb_boot_assert(false);
-                usb_boot_latched = false;
-            }
-
-            if (on_sw_rising) {
-                all_outputs_safe_off();
-                state = DEV_OFF;
-                on_switch_fall_armed = true;
-                break;
-            }
-
-            if (timer_expired(now_ms, startup_3v3_deadline)) {
-                enable_3v3(true);
-                state = DEV_RUNNING;
-            }
-            break;
-
-        case DEV_RUNNING:
-            /* Rev.B workaround: keep PB5 pull-up disabled.
-             * set_pin_pullup(&PIN_SIDE_BTN, false);
-             */
-            if (off_req_db.state) {
-                off_req_seen_high = true;
-            }
-            if (usb_boot_latched && timer_expired(now_ms, usb_boot_release_deadline)) {
-                usb_boot_assert(false);
-                usb_boot_latched = false;
-            }
-
-            if (off_req_seen_high && off_req_falling) {
-                all_outputs_safe_off();
-                state = DEV_OFF;
-                on_switch_fall_armed = on_sw_db.state;
-                usb_boot_latched = false;
-                on_out_asserted_flag = false;
-                break;
-            }
-
-            if (on_sw_rising) {
-                on_out_assert(true);
-                on_out_asserted_flag = true;
-                on_out_release_deadline = now_ms + ON_OUT_PULSE_MS;
-                shutdown_deadline = now_ms + SHUTDOWN_TIMEOUT_MS;
-                state = DEV_SHUTDOWN_WAIT;
-            }
-            break;
-
-        case DEV_SHUTDOWN_WAIT:
-            /* Rev.B workaround: keep PB5 pull-up disabled.
-             * set_pin_pullup(&PIN_SIDE_BTN, false);
-             */
-            if (off_req_db.state) {
-                off_req_seen_high = true;
-            }
-            if (on_out_asserted_flag && timer_expired(now_ms, on_out_release_deadline)) {
-                on_out_assert(false);
-                on_out_asserted_flag = false;
-            }
-
-            if (off_req_seen_high && off_req_falling) {
-                all_outputs_safe_off();
-                state = DEV_OFF;
-                on_switch_fall_armed = on_sw_db.state;
-                usb_boot_latched = false;
-                on_out_asserted_flag = false;
-                break;
-            }
-
-            if (timer_expired(now_ms, shutdown_deadline)) {
-                all_outputs_safe_off();
-                state = DEV_OFF;
-                on_switch_fall_armed = on_sw_db.state;
-                usb_boot_latched = false;
-                on_out_asserted_flag = false;
-            }
-            break;
-
-        default:
-            all_outputs_safe_off();
-            state = DEV_OFF;
-            on_switch_fall_armed = on_sw_db.state;
-            usb_boot_latched = false;
-            on_out_asserted_flag = false;
-            break;
-        }
-
-        wdt_reset();
+        /* Timer and button interrupts continue in idle sleep. */
+        sleep_mode();
     }
 }
