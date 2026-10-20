@@ -3,34 +3,42 @@ COM_PORT ?= /dev/ttyUSB0
 UPDI_BAUD ?= 125k
 PYMCUPROG ?= pymcuprog
 FUSES_FILE ?= fuses.hex
+BUILD_DIR ?= build
+HOST_CC ?= cc
 
-CFLAGS ?= -O2 -Wall -Wextra -std=gnu11 -mmcu=$(TARGET)
+CFLAGS ?= -Os -Wall -Wextra -Werror -std=gnu11
+MCUFLAGS = -mmcu=$(TARGET) -DF_CPU=1000000UL
 
-# Fuse values are defined in $(FUSES_FILE) and written in one command.
-# Current profile:
-# - WDTCFG: watchdog ON after reset (8.2s)
-# - BODCFG: 2.6V
-# - OSCCFG: 16MHz oscillator (FW uses /16 prescaler => 1MHz CPU clock)
-# - SYSCFG0/SYSCFG1: UPDI on PA0, startup 64ms
+# fuses.hex: 8K watchdog locked after reset, BOD 2.6 V, 16 MHz oscillator,
+# PA0 UPDI, 64 ms startup. Firmware divides the oscillator by 16.
+.PHONY: all clean test program ping read_fuses fuses
 
-.PHONY: all clean program ping read_fuses fuses
+all: $(BUILD_DIR)/pmu-revC.hex
 
-all: out.hex
+$(BUILD_DIR):
+	mkdir -p $@
 
-out.elf: main.c
-	avr-gcc $(CFLAGS) $< -o $@
+$(BUILD_DIR)/pmu-revC.elf: main.c pmu.c pmu.h Makefile | $(BUILD_DIR)
+	avr-gcc $(CFLAGS) $(MCUFLAGS) main.c pmu.c -o $@
+	avr-size $@
 
-out.hex: out.elf
+$(BUILD_DIR)/pmu-revC.hex: $(BUILD_DIR)/pmu-revC.elf
 	avr-objcopy -O ihex $< $@
 
+$(BUILD_DIR)/test-pmu: tests/test_pmu.c pmu.c pmu.h Makefile | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -pedantic -O2 -I. tests/test_pmu.c pmu.c -o $@
+
+test: $(BUILD_DIR)/test-pmu
+	$(BUILD_DIR)/test-pmu
+
 clean:
-	rm -f out.elf out.hex
+	rm -rf $(BUILD_DIR)
 
 ping:
 	$(PYMCUPROG) ping -d $(TARGET) -t uart -u $(COM_PORT) -c $(UPDI_BAUD)
 
-program: out.hex
-	$(PYMCUPROG) write -f out.hex -d $(TARGET) -t uart -u $(COM_PORT) -c $(UPDI_BAUD) --erase --verify
+program: $(BUILD_DIR)/pmu-revC.hex
+	$(PYMCUPROG) write -f $< -d $(TARGET) -t uart -u $(COM_PORT) -c $(UPDI_BAUD) --erase --verify
 
 read_fuses:
 	$(PYMCUPROG) read -m fuses -d $(TARGET) -t uart -u $(COM_PORT) -c $(UPDI_BAUD)
