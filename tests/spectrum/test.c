@@ -13,6 +13,9 @@
 #include <raylib.h>
 #include <linux/input.h>
 #include <sx1255.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define RES_X 160
 #define RES_Y 128
@@ -40,6 +43,52 @@ int kbd; // keyboard file handle
 
 // file with FFT data
 FILE *fspec;
+
+// FFT flowgraph process
+pid_t fg_pid = -1;
+
+// Start the FFT flowgraph in the background, output discarded
+static pid_t start_flowgraph(void)
+{
+	const char *fg_path = getenv("FG_PATH");
+	if (!fg_path)
+	{
+		fprintf(stderr, "FG_PATH is not set, can not start the flowgraph\n");
+		return -1;
+	}
+
+	char script[512];
+	snprintf(script, sizeof(script), "%s/som_spectrum_test.py", fg_path);
+
+	pid_t pid = fork();
+	if (pid == 0)
+	{
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0)
+		{
+			dup2(devnull, STDOUT_FILENO);
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+		execlp("python", "python", script, (char *)NULL);
+		_exit(127);
+	}
+	if (pid < 0)
+		perror("fork");
+
+	return pid;
+}
+
+// Stop only the flowgraph started above
+static void stop_flowgraph(void)
+{
+	if (fg_pid > 0)
+	{
+		kill(fg_pid, SIGTERM);
+		waitpid(fg_pid, NULL, 0);
+		fg_pid = -1;
+	}
+}
 
 // framebuffer init
 int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
@@ -127,7 +176,7 @@ int main(void)
 	
 	// execute FFT generating flowgraph
 	fprintf(stderr, "Executing flowgraph...\n");
-	system("python $FG_PATH/som_spectrum_test.py &> /dev/null &");
+	fg_pid = start_flowgraph();
 	sleep(2);
 	
 	// open the FFT file
@@ -175,7 +224,7 @@ int main(void)
     // Set low FPS for embedded display
     SetTargetFPS(25);
 
-	float val[256];
+	float val[256] = {0};
 	float map_val[RES_X];
 
     // Main loop
@@ -211,10 +260,15 @@ int main(void)
 		
 		// read FFT data
 		//fseek(fspec, 0, SEEK_SET);
+		// keep the previous frame if the file is missing or not complete yet
 		fspec = fopen("/tmp/fft", "rb");
-		for(uint16_t i=0; i<256; i++)
-			fread(&val[i], sizeof(float), 1, fspec);
-		fclose(fspec);
+		if (fspec)
+		{
+			float tmp[256];
+			if (fread(tmp, sizeof(float), 256, fspec) == 256)
+				memcpy(val, tmp, sizeof(val));
+			fclose(fspec);
+		}
 		
 		//scale and offset
 		for(uint16_t i=0; i<256; i++)
@@ -298,7 +352,7 @@ int main(void)
 	kbd_cleanup(kbd);
 	sx1255_cleanup();
 	//fclose(fspec);
-	system("kill -TERM `pidof python`");
+	stop_flowgraph();
     CloseWindow();
     
     return 0;
