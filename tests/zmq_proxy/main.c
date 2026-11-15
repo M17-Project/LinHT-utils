@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <signal.h>
 #include <arpa/inet.h>
 #include <zmq.h>
@@ -38,19 +39,40 @@ typedef enum
 
 state_t radio_state = STATE_RX;
 
-void exit_handler(int sig)
+// set by SIGINT/SIGTERM, the main loop exits and cleans up
+static volatile sig_atomic_t stop_requested = 0;
+
+static void stop_handler(int sig)
 {
 	(void)sig;
-    fprintf(stderr, "\nCaught Ctrl-C (SIGINT). Cleaning up...\n");
-	snd_pcm_drain(bsb_rx);
-    snd_pcm_close(bsb_rx);
-	snd_pcm_drain(bsb_tx); // required?
-    snd_pcm_close(bsb_tx);
-	zmq_unbind(zmq_pub, "ipc://" RX_IPC); // "tcp://*:17001"
-	zmq_unbind(zmq_sub, "ipc://" TX_IPC); // "tcp://*:17002"
-	zmq_disconnect(zmq_ptt_sub, PTT_IPC);
-	zmq_ctx_destroy(&zmq_ctx);
-	exit(EXIT_SUCCESS);
+	stop_requested = 1;
+}
+
+// report ALSA setup errors, return the error code unchanged
+static int alsa_check(int err, const char *what)
+{
+	if (err < 0)
+		fprintf(stderr, "ALSA: %s failed: %s\n", what, snd_strerror(err));
+	return err;
+}
+
+static void cleanup(void)
+{
+	fprintf(stderr, "Cleaning up...\n");
+	snd_pcm_drop(bsb_rx);
+	snd_pcm_close(bsb_rx);
+	snd_pcm_drop(bsb_tx);
+	snd_pcm_close(bsb_tx);
+
+	// do not wait for undelivered messages when closing
+	int linger = 0;
+	zmq_setsockopt(zmq_pub, ZMQ_LINGER, &linger, sizeof(linger));
+	zmq_setsockopt(zmq_sub, ZMQ_LINGER, &linger, sizeof(linger));
+	zmq_setsockopt(zmq_ptt_sub, ZMQ_LINGER, &linger, sizeof(linger));
+	zmq_close(zmq_pub);
+	zmq_close(zmq_sub);
+	zmq_close(zmq_ptt_sub);
+	zmq_ctx_term(zmq_ctx);
 }
 
 uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
@@ -97,7 +119,13 @@ void rx_stop_cleanup(void)
 
 int main(void)
 {
-	signal(SIGINT, exit_handler);
+	// no SA_RESTART, so blocking ALSA and ZMQ calls return early on a signal
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = stop_handler;
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL); // systemd stops the service with SIGTERM
 	
 	zmq_ctx = zmq_ctx_new();
     zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
@@ -140,39 +168,39 @@ int main(void)
 	
 	// RX
 	snd_pcm_hw_params_malloc(&dev_params);
-    snd_pcm_hw_params_any(bsb_rx, dev_params);
-    snd_pcm_hw_params_set_access(bsb_rx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(bsb_rx, dev_params, SND_PCM_FORMAT_S32_LE);
-    snd_pcm_hw_params_set_channels(bsb_rx, dev_params, 2);
-    snd_pcm_hw_params_set_rate(bsb_rx, dev_params, rate, 0);
-    snd_pcm_hw_params_set_period_size(bsb_rx, dev_params, ZMQ_LEN, 0);
-    snd_pcm_hw_params(bsb_rx, dev_params);
-    snd_pcm_hw_params_free(dev_params);
+	// The SX1255 is the I2S clock master, so the rate here is nominal.
+	// Failures of the individual settings are reported but not fatal.
+	alsa_check(snd_pcm_hw_params_any(bsb_rx, dev_params), "RX hw_params_any");
+	alsa_check(snd_pcm_hw_params_set_access(bsb_rx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED), "RX set_access");
+	alsa_check(snd_pcm_hw_params_set_format(bsb_rx, dev_params, SND_PCM_FORMAT_S32_LE), "RX set_format");
+	alsa_check(snd_pcm_hw_params_set_channels(bsb_rx, dev_params, 2), "RX set_channels");
+	alsa_check(snd_pcm_hw_params_set_rate(bsb_rx, dev_params, rate, 0), "RX set_rate");
+	alsa_check(snd_pcm_hw_params_set_period_size(bsb_rx, dev_params, ZMQ_LEN, 0), "RX set_period_size");
+	retval = alsa_check(snd_pcm_hw_params(bsb_rx, dev_params), "RX hw_params");
+	snd_pcm_hw_params_free(dev_params);
+	if (retval < 0)
+		return -1;
 	
 	// TX
 	snd_pcm_hw_params_malloc(&dev_params);
-    snd_pcm_hw_params_any(bsb_tx, dev_params);
-    snd_pcm_hw_params_set_access(bsb_tx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(bsb_tx, dev_params, SND_PCM_FORMAT_S32_LE);
-    snd_pcm_hw_params_set_channels(bsb_tx, dev_params, 2);
-    snd_pcm_hw_params_set_rate(bsb_tx, dev_params, rate, 0);
-    snd_pcm_hw_params_set_period_size(bsb_tx, dev_params, ZMQ_LEN, 0);
-    snd_pcm_hw_params(bsb_tx, dev_params);
-    snd_pcm_hw_params_free(dev_params);
-	
-    retval = snd_pcm_prepare(bsb_rx);
-	if (retval != 0)
-	{
-		fprintf(stderr, "Error\n");
+	// The SX1255 is the I2S clock master, so the rate here is nominal.
+	// Failures of the individual settings are reported but not fatal.
+	alsa_check(snd_pcm_hw_params_any(bsb_tx, dev_params), "TX hw_params_any");
+	alsa_check(snd_pcm_hw_params_set_access(bsb_tx, dev_params, SND_PCM_ACCESS_RW_INTERLEAVED), "TX set_access");
+	alsa_check(snd_pcm_hw_params_set_format(bsb_tx, dev_params, SND_PCM_FORMAT_S32_LE), "TX set_format");
+	alsa_check(snd_pcm_hw_params_set_channels(bsb_tx, dev_params, 2), "TX set_channels");
+	alsa_check(snd_pcm_hw_params_set_rate(bsb_tx, dev_params, rate, 0), "TX set_rate");
+	alsa_check(snd_pcm_hw_params_set_period_size(bsb_tx, dev_params, ZMQ_LEN, 0), "TX set_period_size");
+	retval = alsa_check(snd_pcm_hw_params(bsb_tx, dev_params), "TX hw_params");
+	snd_pcm_hw_params_free(dev_params);
+	if (retval < 0)
 		return -1;
-	}
 	
-	retval = snd_pcm_prepare(bsb_tx);
-	if (retval != 0)
-	{
-		fprintf(stderr, "Error\n");
+	if (alsa_check(snd_pcm_prepare(bsb_rx), "RX prepare") < 0)
 		return -1;
-	}
+
+	if (alsa_check(snd_pcm_prepare(bsb_tx), "TX prepare") < 0)
+		return -1;
 	
 	string_to_pmt(sot_pmt, "SOT");
 	string_to_pmt(eot_pmt, "EOT");
@@ -185,21 +213,25 @@ int main(void)
 		{ zmq_sub,     0, ZMQ_POLLIN, 0 },
 	};
 
-	while (1)
+	while (!stop_requested)
 	{
 		// handle PTT + TX baseband readiness (non-blocking)
 		zmq_poll(zitems, 2, 0);   // no wait, just update revents
 
 		if (zitems[0].revents & ZMQ_POLLIN)
 		{
-			zmq_recv(zmq_ptt_sub, (uint8_t*)pmt_buff, sizeof(pmt_buff), ZMQ_DONTWAIT);
+			int r = zmq_recv(zmq_ptt_sub, (uint8_t*)pmt_buff, sizeof(pmt_buff), ZMQ_DONTWAIT);
 
-			if (memcmp(pmt_buff, sot_pmt, 6) == 0)
+			if (r < 0)
+			{
+				; // nothing received (e.g. interrupted by a signal)
+			}
+			else if (r == 6 && memcmp(pmt_buff, sot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT pressed\n");
 				rx_stop_cleanup();
 			}
-			else if (memcmp(pmt_buff, eot_pmt, 6) == 0)
+			else if (r == 6 && memcmp(pmt_buff, eot_pmt, 6) == 0)
 			{
 				fprintf(stderr, "PTT released\n");
 				tx_stop_cleanup();
@@ -225,6 +257,12 @@ int main(void)
 			if (w < 0)
 			{
 				snd_pcm_recover(bsb_rx, w, 1);
+				continue;
+			}
+			else if (w == 0)
+			{
+				// no data yet (e.g. no I2S clock from the SX1255), do not
+				// block in readi, go back and check for PTT messages
 				continue;
 			}
 
@@ -274,7 +312,7 @@ int main(void)
 					uint8_t *p = (uint8_t*)tx_buff;
 
 					// write all full periods contained in this ZMQ message
-					while (bytes_left >= (int)BYTES_PER_PERIOD && radio_state == STATE_TX)
+					while (bytes_left >= (int)BYTES_PER_PERIOD && radio_state == STATE_TX && !stop_requested)
 					{
 						snd_pcm_sframes_t written;
 
@@ -286,18 +324,20 @@ int main(void)
 								ZMQ_LEN / 2       // frames per period
 							);
 
-							if (written == -EPIPE)
-							{
-								// underrun
-								snd_pcm_recover(bsb_tx, written, 1);
-							}
-							else if (written < 0)
-							{
-								// other error
-								snd_pcm_recover(bsb_tx, written, 1);
-							}
+							// underrun (-EPIPE), suspend or signal: recover and retry
+							if (written < 0 && snd_pcm_recover(bsb_tx, written, 1) < 0)
+								break; // unrecoverable, give up on this period
 						}
-						while (written < 0 && radio_state == STATE_TX);
+						while (written < 0 && !stop_requested);
+
+						if (written < 0)
+						{
+							// drop the rest of this message and go back to
+							// the main loop, so PTT messages are still handled
+							if (!stop_requested)
+								fprintf(stderr, "TX: write failed: %s\n", snd_strerror((int)written));
+							break;
+						}
 
 						// ALSA should either block until this period is played,
 						// or recover and retry, so when we get here this period is "consumed".
@@ -324,6 +364,6 @@ int main(void)
 		}
 	}
 	
-	// shouldn't get here
+	cleanup();
 	return 0;
 }
