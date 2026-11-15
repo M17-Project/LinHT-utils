@@ -1,6 +1,11 @@
 /*
  * GPIO control - TX/RX RF switch
  * MX93_PAD_GPIO_IO15__GPIO2_IO15
+ *
+ * The line drives the SKY13330 CTRL input: high selects RX (RF1-RF2),
+ * low selects TX (RF1-RF3).
+ *
+ * Usage: tx_rx [0|1]   0 or no argument: RX, 1: TX
  */
 #include <stdio.h>
 #include <errno.h>
@@ -33,7 +38,7 @@ int gpio_init(const char* appname)
     }
     // Configure the settings for our output pin
     gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
-    gpiod_line_settings_set_output_value(settings, 0); // Initial value is LOW
+    gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_ACTIVE); // start in RX (high)
 
     // Create a line config object to hold the settings for lines
     struct gpiod_line_config *line_cfg = gpiod_line_config_new();
@@ -86,10 +91,11 @@ int gpio_init(const char* appname)
     return 0;
 }
 
+// state: 0 = RX (line high), 1 = TX (line low)
 int tx_rx(uint8_t state)
 {
     // Set value using gpiod V2 API
-    enum gpiod_line_value values[] = {state ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE};
+    enum gpiod_line_value values[] = {state ? GPIOD_LINE_VALUE_INACTIVE : GPIOD_LINE_VALUE_ACTIVE};
 
     if(gpiod_line_request_set_values(txrx_line_request, values) < 0)
     {
@@ -115,25 +121,22 @@ void gpio_cleanup(void)
 
 int main(int argc, char* argv[])
 {
-	gpio_init(argv[0]);
-
-	if(argc==1) //no args given
+	if(gpio_init(argv[0]) != 0)
 	{
-		tx_rx(0); //RX
+		return 1;
+	}
+
+	int ret;
+	if(argc==1 || argv[1][0]=='0') //no args given or '0'
+	{
+		ret = tx_rx(0); //RX
 	}
 	else
 	{
-		if(argv[1][0]=='0')
-		{
-			tx_rx(0);
-		}
-		else
-		{
-			tx_rx(1);
-		}
+		ret = tx_rx(1); //TX
 	}
-	
+
 	gpio_cleanup();
 
-	return 0;
+	return ret;
 }
