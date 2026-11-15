@@ -137,7 +137,7 @@ struct gpio_desc gpio_list[] = {
     {0,  4, 1, 1},  // gpiochip0, line  4, output, high  -> GPIO2_IO[4]  - Pin  125 - LED1
     {0,  5, 1, 1},  // gpiochip0, line  5, output, high  -> GPIO2_IO[5]  - Pin  124 - LED2
 	{1,  5, 1, 0}, // ~{MIC_MUTE} - GPIO3_IO[5]
-	{0, 13, 1, 0} //RF_SW_CTRL - GPIO2_IO[13]
+	{0, 15, 1, 0} //RF_SW_CTRL - GPIO2_IO[15]
 	//{1,  7, 1, 0},  // gpiochip1, line  7, output, disabled  -> GPIO3_IO[7]  - Pin  65 - 3.3V regulator
     // Add more as needed...
 };

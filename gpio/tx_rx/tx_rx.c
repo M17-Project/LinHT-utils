@@ -1,6 +1,6 @@
 /*
  * GPIO control - TX/RX RF switch
- * MX93_PAD_GPIO_IO13__GPIO2_IO13
+ * MX93_PAD_GPIO_IO15__GPIO2_IO15
  */
 #include <stdio.h>
 #include <errno.h>
@@ -11,7 +11,7 @@ struct gpiod_chip *chip_v2;
 struct gpiod_line_request *txrx_line_request;
 
 const char *gpio_chip_path = "/dev/gpiochip0";
-const uint16_t gpio_pin_offset = 13;
+const uint16_t gpio_pin_offset = 15;
 
 int gpio_init(const char* appname)
 {
