@@ -806,6 +806,8 @@ int main(void)
 	uint8_t pga_gain = conf->frontend.pga_gain;
 	int8_t dac_gain = conf->frontend.dac_gain;
 	float mix_gain = conf->frontend.mix_gain;
+	float atten_0 = conf->frontend.atten_0;
+	float atten_1 = conf->frontend.atten_1;
 
 	// settings printout
 	if (1)
@@ -825,6 +827,8 @@ int main(void)
 		fprintf(stderr, "       PGA gain  %d dB\n", pga_gain);
 		fprintf(stderr, "       DAC gain  %d dB\n", dac_gain);
 		fprintf(stderr, "     Mixer gain  %.1f dB\n", mix_gain);
+		fprintf(stderr, "    RX atten. 0  %.1f dB\n", atten_0);
+		fprintf(stderr, "    RX atten. 1  %.1f dB\n", atten_1);
 		fprintf(stderr, " VFO A TX sust.  %d ms\n", vfo_a_tx_sust);
 		fprintf(stderr, " VFO B TX sust.  %d ms\n", vfo_b_tx_sust);
 		fprintf(stderr, "-----------------------------\n");
@@ -874,10 +878,18 @@ int main(void)
 	sx1255_enable_tx(true);
 	sx1255_pa_enable(false);
 
-    // Init and set Attenuators
-	linht_ctrl_atten_init();
-	linht_ctrl_atten_set(1, 0.0);
-    linht_ctrl_atten_set(2, 0.0);
+	// RX attenuators, values from the settings file
+	if (linht_ctrl_atten_init() != 0)
+	{
+		fprintf(stderr, "Can not initialize RX attenuators.\n");
+	}
+	else
+	{
+		if (linht_ctrl_atten_set(1, atten_0) != 0)
+			fprintf(stderr, "Invalid RX attenuator 0 setting: %.1f dB (allowed 0..31.5 dB)\n", atten_0);
+		if (linht_ctrl_atten_set(2, atten_1) != 0)
+			fprintf(stderr, "Invalid RX attenuator 1 setting: %.1f dB (allowed 0..31.5 dB)\n", atten_1);
+	}
 
 	// Disable PA on startup
 	linht_ctrl_pa_enable_set(false);
