@@ -29,8 +29,8 @@ receiver.
 
 * **CF32** (native float complex samples)
 * **CS16** compatible path for rtl_433
-* SX1255 **frequency tuning**
-* SX1255 **gain control** (LNA, PGA, DAC, MIX)
+* SX1255 **frequency tuning** (420 to 470 MHz, requests outside are clamped)
+* SX1255 **RX gain control** (LNA, PGA)
 * Automatic **DC offset removal**
 * Integrated **inverse-sinc FIR equalizer**
 * FIFO-based streaming for consistent MTU handling
@@ -157,8 +157,9 @@ Gain is mapped to SX1255 HW blocks:
 | ------- | --------------------------- | ----------------- |
 | **LNA** | RF preamp                   | 0–48 dB           |
 | **PGA** | Programmable gain amplifier | 0–30 dB           |
-| **DAC** | DAC attenuation             | 0, -3, -6, -9 dB  |
-| **MIX** | Mixer gain                  | −37.5 to −7.5 dB  |
+
+The DAC and mixer gains belong to the TX path and are not exposed while the
+driver is RX only.
 
 You can manually set gain:
 

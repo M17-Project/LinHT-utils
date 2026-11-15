@@ -24,10 +24,13 @@ extern "C" {
 
 #include "fir.h"
 
-static const size_t ZMQ_LEN_INTS = 2048;  // 2048 int32_t → 1024 complex samples
+static const size_t ZMQ_LEN_INTS = 2048;  // 2048 int32_t = 1024 complex samples
 static const size_t ZMQ_COMPLEX_SAMPLES = ZMQ_LEN_INTS / 2;
 static const double LINHT_SAMPLE_RATE = 500000.0; // 500 kSa/s
 static const double LINHT_CENTER_FREQ = 433.475e6;
+// Tuning range offered by this driver (70 cm band, the SX1255 covers 400..510 MHz)
+static const double LINHT_FREQ_MIN = 420.0e6;
+static const double LINHT_FREQ_MAX = 470.0e6;
 
 // SX1255 is a global singleton (the chip is only one and is shared).
 // SoapySDR may create *multiple* LinHTZmqDevice instances for one client
@@ -35,7 +38,8 @@ static const double LINHT_CENTER_FREQ = 433.475e6;
 // Without this reference counter we would call sx1255_init()/sx1255_cleanup()
 // multiple times and break the GPIO/SPI state for others.
 // `g_sx1255_users` ensures that SX1255 is initialized only once and cleaned up
-// only when the last device instance is destroyed.
+// only when the last device instance is destroyed. Only instances that hold
+// the chip (ownsSx1255) are counted.
 static int g_sx1255_users = 0;
 
 // Opaque stream state for this driver
@@ -133,7 +137,8 @@ public:
 
         if (name.empty() || name == "RF")
         {
-            centerFreqHz = frequency;
+            // store the frequency the hardware is really tuned to
+            centerFreqHz = std::clamp(frequency, LINHT_FREQ_MIN, LINHT_FREQ_MAX);
             applyHardwareFrequency();
         }
     }
@@ -165,8 +170,8 @@ public:
         if (direction == SOAPY_SDR_RX && channel == 0 &&
             (name.empty() || name == "RF"))
         {
-            // Arbitrary narrow range around 433 MHz (purely informational)
-            ranges.emplace_back(420.0e6, 470.0e6);
+            // setFrequency() clamps to this range
+            ranges.emplace_back(LINHT_FREQ_MIN, LINHT_FREQ_MAX);
         }
         return ranges;
     }
@@ -236,10 +241,13 @@ public:
     }
 
     // Gain api ----------------------------------------------------------
+    // RX gains only. The DAC and mixer gains belong to the TX path, which this
+    // driver does not support. Listing them made the overall RX gain spill
+    // into TX registers.
     std::vector<std::string> listGains(int dir, size_t chan) const
     {
         if(dir == SOAPY_SDR_RX && chan == 0)
-            return {"LNA", "PGA", "DAC", "MIX"};
+            return {"LNA", "PGA"};
         return {};
     }
 
@@ -249,8 +257,6 @@ public:
 
         if(name == "LNA") return lnaGainDb;
         if(name == "PGA") return pgaGainDb;
-        if(name == "DAC") return dacGainDb;
-        if(name == "MIX") return mixGainDb;
 
         return 0.0;
     }
@@ -261,8 +267,6 @@ public:
 
         if(name == "LNA") return SoapySDR::Range(0.0, 48.0);
         if(name == "PGA") return SoapySDR::Range(0.0, 30.0);
-        if(name == "DAC") return SoapySDR::Range(-9.0, 0.0);
-        if(name == "MIX") return SoapySDR::Range(-37.5, -7.5);
 
         return SoapySDR::Range();
     }
@@ -272,8 +276,6 @@ public:
              const double value)
     {
         if(dir != SOAPY_SDR_RX || chan != 0 || !rfCtrlAvailable) return;
-
-        std::cerr << "LinHTZmq: " << name <<" gain set to " << value << " dB\n";
 
         if(name == "LNA")
         {
@@ -287,26 +289,12 @@ public:
             sx1255_set_pga_gain(static_cast<uint8_t>(std::lround(g)));
             pgaGainDb = g;
         }
-        else if(name == "DAC")
+        else
         {
-            // snap to allowed values: 0, -3, -6, -9
-            static const double allowed[] = {0.0, -3.0, -6.0, -9.0};
-            double best = allowed[0];
-            double bestDiff = std::abs(value - best);
-            for (double a : allowed)
-            {
-                double d = std::abs(value - a);
-                if (d < bestDiff) { best = a; bestDiff = d; }
-            }
-            sx1255_set_dac_gain(static_cast<int8_t>(std::lround(best)));
-            dacGainDb = best;
+            return;
         }
-        else if(name == "MIX")
-        {
-            double g = std::clamp(value, -37.5, -7.5);
-            sx1255_set_mixer_gain(static_cast<float>(g));
-            mixGainDb = g;
-        }
+
+        std::cerr << "LinHTZmq: " << name << " gain set to " << getGain(dir, chan, name) << " dB\n";
     }
 
     // Stream API --------------------------------------------------------
@@ -432,7 +420,9 @@ public:
             }
             else if(rc != sizeof(rxBuf))
             {
-                throw std::runtime_error("LinHTZmq: ZMQ data truncated!");
+                // wrong block size: drop it instead of throwing into the client
+                std::cerr << "LinHTZmq: dropped a ZMQ block of " << rc << " bytes\n";
+                continue;
             }
 
             size_t nInts = rc / sizeof(int32_t);
@@ -519,13 +509,15 @@ private:
     double centerFreqHz;
     double lnaGainDb = 0.0;
     double pgaGainDb = 24.0;
-    double dacGainDb = -3.0;
-    double mixGainDb = -9.5;
+    // TX path defaults, written once at init (TX is not supported yet)
+    const int8_t dacGainDb = -3;
+    const float mixGainDb = -9.5f;
 
     // SX1255 related
     // SX1255 related (default values are set in constructor,
     // findLinHTZmq() may override them via Kwargs)
     bool rfCtrlAvailable;
+    bool ownsSx1255;    // counted in g_sx1255_users
     std::string spiDevice;
     std::string gpioChip;
     int resetPinOffset;
@@ -537,14 +529,14 @@ private:
             return;
         }
 
-        double freq = centerFreqHz;
-        if (freq < 420.0e6) freq = 420.0e6;
-        if (freq > 470.0e6) freq = 470.0e6;
+        uint32_t f_hz = static_cast<uint32_t>(centerFreqHz + 0.5);
 
-        uint32_t f_hz = static_cast<uint32_t>(freq + 0.5);
-
-        sx1255_set_rx_freq(f_hz);
-        // sx1255_set_tx_freq(f_hz);
+        if (sx1255_set_rx_freq(f_hz) != 0)
+        {
+            std::cerr << "LinHTZmq: SX1255 tuning to " << f_hz / 1e6
+                      << " MHz failed or the RX PLL did not lock\n";
+            return;
+        }
 
         std::cerr << "LinHTZmq: SX1255 tuned to " << f_hz / 1e6 << " MHz\n";
     }
@@ -556,6 +548,7 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
     , endpoint("ipc:///tmp/bsb_rx")
     , centerFreqHz(LINHT_CENTER_FREQ)
     , rfCtrlAvailable(false)
+    , ownsSx1255(false)
     , spiDevice("/dev/spidev0.0")
     , gpioChip("/dev/gpiochip0")
     , resetPinOffset(22)
@@ -654,12 +647,13 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
 
         sx1255_set_lna_gain(static_cast<uint8_t>(std::lround(lnaGainDb)));
         sx1255_set_pga_gain(static_cast<uint8_t>(std::lround(pgaGainDb)));
-        sx1255_set_dac_gain(static_cast<int8_t>(std::lround(dacGainDb)));
-        sx1255_set_mixer_gain(static_cast<float>(mixGainDb));
+        sx1255_set_dac_gain(dacGainDb);
+        sx1255_set_mixer_gain(mixGainDb);
 
     }
 
     g_sx1255_users++;
+    ownsSx1255 = true;
     rfCtrlAvailable = true;
     applyHardwareFrequency();
 }
@@ -677,10 +671,15 @@ LinHTZmqDevice::~LinHTZmqDevice()
         zmqCtx = nullptr;
     }
 
-    g_sx1255_users--;
-    if (g_sx1255_users == 0)
+    // a failed sx1255_init() did not count this instance
+    if (ownsSx1255)
     {
-        sx1255_cleanup();
+        g_sx1255_users--;
+        if (g_sx1255_users == 0)
+        {
+            sx1255_cleanup();
+        }
+        ownsSx1255 = false;
     }
     rfCtrlAvailable = false;
 }
@@ -689,7 +688,7 @@ static SoapySDR::KwargsList findLinHTZmq(const SoapySDR::Kwargs &args)
 {
     SoapySDR::KwargsList results;
 
-    // Filtr na driver=linht (pokud uživatel něco zadal)
+    // filter on driver=linht (if the user gave one)
     auto it = args.find("driver");
     if (it != args.end() && it->second != "linht")
         return results;
@@ -698,13 +697,13 @@ static SoapySDR::KwargsList findLinHTZmq(const SoapySDR::Kwargs &args)
     dev["driver"] = "linht";
     dev["label"] = "LinHT ZMQ";
 
-    // Defaulty pro SX1255 + RX endpoint
+    // defaults for the SX1255 and the RX endpoint
     dev["rx_endpoint"]  = "ipc:///tmp/bsb_rx";
     dev["sx1255_spi"]   = "/dev/spidev0.0";
     dev["sx1255_gpio"]  = "/dev/gpiochip0";
     dev["sx1255_reset"] = "22";
 
-    // Když uživatel v původních args něco přepíše, respektuj to:
+    // keep any value the user passed in the original args
     auto epIt = args.find("rx_endpoint");
     if (epIt != args.end())
         dev["rx_endpoint"] = epIt->second;
