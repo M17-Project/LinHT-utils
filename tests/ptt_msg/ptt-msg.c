@@ -3,6 +3,7 @@
 #include <stdint.h>
 // #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 // #include <time.h>
@@ -16,8 +17,8 @@
 #define KEY_RELEASE 0
 
 int kbd;
-char *kbd_path = "/dev/input/event0";
-char *zmq_ipc = "ipc:///tmp/ptt_msg";
+const char *kbd_path = "/dev/input/event0";
+const char *zmq_ipc = "ipc:///tmp/ptt_msg";
 
 uint8_t sot_pmt[10];
 uint8_t eot_pmt[10];
@@ -53,11 +54,13 @@ void kbd_cleanup(int fhandle)
     close(fhandle);
 }
 
+// pmt must hold 3 + strlen(msg) bytes
 uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 {
-    pmt[0] = 2;                                  // pmt type - zmq message
-    *((uint16_t *)&pmt[1]) = htons(strlen(msg)); // length
-    strcpy((char *)&pmt[3], msg);
+    uint16_t len = htons(strlen(msg));
+    pmt[0] = 2;                 // pmt type - zmq message
+    memcpy(&pmt[1], &len, 2);   // length, big endian (pmt+1 is not aligned)
+    memcpy(&pmt[3], msg, strlen(msg));
 
     return 3 + strlen(msg);
 }
@@ -95,7 +98,7 @@ int main(int argc, char *argv[])
             if (strlen(optarg) > 0)
             {
                 printf("Setting keyboard device path to %s\n", optarg);
-                strcpy(kbd_path, optarg);
+                kbd_path = optarg;
             }
             else
             {
@@ -107,7 +110,7 @@ int main(int argc, char *argv[])
             if (strlen(optarg) > 0)
             {
                 printf("Setting ZeroMQ Unix socket to %s\n", optarg);
-                strcpy(zmq_ipc, optarg);
+                zmq_ipc = optarg;
             }
             else
             {
@@ -136,9 +139,14 @@ int main(int argc, char *argv[])
     void *zmq_ctx = zmq_ctx_new();
     void *zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
 
-    if (zmq_bind(zmq_pub, zmq_ipc) != 0)
+    if (!zmq_ctx || !zmq_pub || zmq_bind(zmq_pub, zmq_ipc) != 0)
     {
-        printf("ZeroMQ: Error connecting to Unix socket %s.\nExiting.\n", zmq_ipc);
+        printf("ZeroMQ: Error binding to Unix socket %s.\nExiting.\n", zmq_ipc);
+        if (zmq_pub)
+            zmq_close(zmq_pub);
+        if (zmq_ctx)
+            zmq_ctx_destroy(zmq_ctx);
+        kbd_cleanup(kbd);
         return 1;
     }
 
@@ -152,6 +160,14 @@ int main(int argc, char *argv[])
     {
         struct input_event ev;
         ssize_t n = read(kbd, &ev, sizeof(ev));
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            perror("read keyboard dev");
+            rval = 1;
+            break;
+        }
         if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
         {
             if (ev.value == KEY_PRESS)
@@ -167,7 +183,7 @@ int main(int argc, char *argv[])
                     ;
                 }
             }
-            else // release
+            else if (ev.value == KEY_RELEASE) // autorepeat (2) is ignored
             {
                 if (ev.code == KEY_P)
                 {
@@ -183,9 +199,12 @@ int main(int argc, char *argv[])
         }
     }
 
-    // cleanup - TODO: move it elsewhere
-    zmq_unbind(zmq_pub, zmq_ipc);
-    zmq_ctx_destroy(&zmq_ctx);
+    // cleanup
+    linht_ctrl_red_led_set(false);
+    zmq_close(zmq_pub);
+    zmq_ctx_destroy(zmq_ctx);
     kbd_cleanup(kbd);
+
+    return rval;
 }
 
