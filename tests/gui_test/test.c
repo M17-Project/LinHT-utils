@@ -24,8 +24,8 @@
 #include "settings.h"
 
 // keymap states
-#define KEY_PRESS 0
-#define KEY_RELEASE 1
+#define KEY_PRESS 1
+#define KEY_RELEASE 0
 
 #define arrlen(x) (sizeof(x) / sizeof(*x))
 

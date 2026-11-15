@@ -152,7 +152,7 @@ int main(int argc, char *argv[])
     {
         struct input_event ev;
         ssize_t n = read(kbd, &ev, sizeof(ev));
-        if (n == (ssize_t)sizeof(ev))
+        if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
         {
             if (ev.value == KEY_PRESS)
             {

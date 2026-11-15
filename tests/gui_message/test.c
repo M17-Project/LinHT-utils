@@ -37,8 +37,8 @@
 #define LINHT_KEY_UP 103
 #define LINHT_KEY_DOWN 108
 
-#define KEY_PRESS 0
-#define KEY_RELEASE 1
+#define KEY_PRESS 1
+#define KEY_RELEASE 0
 
 // return value
 int rval;
@@ -326,7 +326,7 @@ int main(void)
 		struct input_event ev;
 		fcntl(kbd, F_SETFL, fcntl(kbd, F_GETFL, 0) | O_NONBLOCK); //non-blocking access
 		ssize_t n = read(kbd, &ev, sizeof(ev));
-		if (n == (ssize_t)sizeof(ev))
+		if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
 		{
 			if (ev.value == KEY_PRESS)
 			{

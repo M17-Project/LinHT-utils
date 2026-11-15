@@ -57,8 +57,8 @@ int kbd; // keyboard file handle
 #define KEY_UP 103
 #define KEY_DOWN 108
 
-#define KEY_PRESS 0
-#define KEY_RELEASE 1
+#define KEY_PRESS 1
+#define KEY_RELEASE 0
 
 char tle[2][128] =
 	{
@@ -241,7 +241,7 @@ int main(void)
 	while (1)
 	{
 		ssize_t n = read(kbd, &ev, sizeof(ev));
-		if (n == (ssize_t)sizeof(ev))
+		if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
 		{
 			/*printf("time %ld.%06ld\ttype %u\tcode %u\tvalue %d\n",
 				   ev.time.tv_sec, ev.time.tv_usec,
