@@ -21,12 +21,13 @@ uint16_t soft_bit[2 * SYM_PER_PLD];     // raw frame soft bits
 uint16_t d_soft_bit[2 * SYM_PER_PLD];   // deinterleaved soft bits
 
 lsf_t lsf;                              // complete LSF
+bool lsf_valid = false;                 // LSF of the current transmission received with a valid CRC?
 uint8_t frame_data[26];                 // decoded frame data, 206 bits
-uint8_t packet_data[33 * 25];           // whole packet data
+uint8_t packet_data[33 * 25 + 1];       // whole packet data, plus a terminating null
 
 uint8_t syncd = 0;                      // syncword found?
 uint8_t fl = 0;                         // Frame=0 of LSF=1
-int8_t last_fn;                         // last received frame number (-1 when idle)
+int8_t last_fn = -1;                    // last received frame number (-1 when idle)
 uint8_t pushed;                         // counter for pushed symbols
 
 float det_thresh = 5.0f;
@@ -71,6 +72,7 @@ int db_init(char *db_path)
     if (retval != SQLITE_OK)
     {
         printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
         return 1;
     }
 
@@ -110,6 +112,7 @@ int push_message(char *db_path, message_t msg)
     if (retval != SQLITE_OK)
     {
         printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
         return 1;
     }
 
@@ -164,6 +167,7 @@ int get_message_count(char *db_path)
     if (retval != SQLITE_OK)
 	{
         printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
         return -1;
     }
 
@@ -195,6 +199,7 @@ int get_unread_message_count(char *db_path)
     if (retval != SQLITE_OK)
 	{
         printf("Cannot open database: %s\nExiting.\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
         return -1;
     }
 
@@ -245,7 +250,12 @@ int main(int argc, char *argv[])
         switch (opt)
         {
         case 'd':
-            if (strlen(optarg) > 0)
+            if (strlen(optarg) >= sizeof(db_path))
+            {
+                printf("Database path too long (max. %zu characters)\nExiting.\n", sizeof(db_path) - 1);
+                return 1;
+            }
+            else if (strlen(optarg) > 0)
             {
                 printf("Setting database path to %s\n", optarg);
                 strcpy(db_path, optarg);
@@ -257,7 +267,12 @@ int main(int argc, char *argv[])
             break;
 
         case 's':
-            if (strlen(optarg) > 0)
+            if (strlen(optarg) >= sizeof(symb_path))
+            {
+                printf("IPC socket path too long (max. %zu characters)\nExiting.\n", sizeof(symb_path) - 1);
+                return 1;
+            }
+            else if (strlen(optarg) > 0)
             {
                 printf("Setting IPC symbol source path to %s\n", optarg);
                 strcpy(symb_path, optarg);
@@ -316,12 +331,19 @@ int main(int argc, char *argv[])
     // main loop
     while (1)
     {
-        int16_t size = zmq_recv(zmq_sub, (uint8_t*)symb_buff, sizeof(symb_buff), 0);
-        
-        if (size == -1)
+        int size = zmq_recv(zmq_sub, (uint8_t*)symb_buff, sizeof(symb_buff), 0);
+
+        if (size < 0)
             continue;
-        
-        for (uint16_t i=0; i<size/sizeof(float); i++)
+
+        // zmq_recv() returns the full message size, but stores at most sizeof(symb_buff)
+        if ((size_t)size > sizeof(symb_buff))
+        {
+            printf("Symbol message too long (%d bytes), truncated\n", size);
+            size = sizeof(symb_buff);
+        }
+
+        for (size_t i = 0; i < (size_t)size / sizeof(float); i++)
         {
             float sample = symb_buff[i];
 
@@ -354,7 +376,9 @@ int main(int argc, char *argv[])
                         syncd = 1;
                         pushed = 0;
                         last_fn = -1;
-                        memset(packet_data, 0, 33 * 25);
+                        memset(packet_data, 0, sizeof(packet_data));
+                        memset(msg.src, 0, sizeof(msg.src)); // a new transmission, its callsigns come with its LSF
+                        memset(msg.dst, 0, sizeof(msg.dst));
                         fl = 1;
                     }
                 }
@@ -378,38 +402,51 @@ int main(int argc, char *argv[])
                             memcpy(&packet_data[rx_fn * 25], frame_data, 25);
                             last_fn++;
                         }
+                        else if (rx_last && (rx_fn < 1 || rx_fn > 25))
+                        {
+                            // the last frame carries the number of bytes in it, 1..25
+                            last_fn = -1;
+                            memset(packet_data, 0, sizeof(packet_data));
+                            memset((uint8_t*)&msg, 0, sizeof(message_t)); // the callsigns belong to this packet only
+                            lsf_valid = false;
+                        }
                         else if (rx_last)
                         {
-                            memcpy(&packet_data[(last_fn + 1) * 25], frame_data, rx_fn < 25 ? rx_fn : 25); // prevent copying too much data (beyond frame_data end)
-                            uint16_t p_len = strlen((const char *)packet_data);
+                            memcpy(&packet_data[(last_fn + 1) * 25], frame_data, rx_fn);
+                            uint16_t p_len = (last_fn + 1) * 25 + rx_fn; // whole packet, including the 2-byte CRC
+                            packet_data[p_len] = 0;                      // the text is always terminated
 
-                            if (CRC_M17(packet_data, p_len + 3) == 0)
+                            if (p_len >= 3 && CRC_M17(packet_data, p_len) == 0)
                             {
                                 // dump data
                                 if (packet_data[0] == 0x05) // if a text message
                                 {
-                                    // CRC
-                                    if (CRC_M17(packet_data, p_len + 3) == 0) // 3: terminating null plus a 2-byte CRC
-                                    {
+                                    if (lsf_valid)
                                         memcpy((uint8_t*)msg.meta, (uint8_t*)lsf.meta, sizeof(lsf.meta));
-                                        strcpy(msg.message, (char*)&packet_data[1]);
-                                        msg.timestamp = time(NULL);
-                                        sprintf(msg.protocol, "M17");
-                                        msg.read = 0;
+                                    strcpy(msg.message, (char*)&packet_data[1]);
+                                    msg.timestamp = time(NULL);
+                                    sprintf(msg.protocol, "M17");
+                                    msg.read = 0;
 
-                                        // dump to database
-                                        printf("Message from %s: %s\n", msg.src, msg.message);
-                                        push_message(db_path, msg);
+                                    // dump to database
+                                    printf("Message from %s: %s\n", msg.src, msg.message);
+                                    push_message(db_path, msg);
 
-                                        memset((uint8_t*)&msg, 0, sizeof(message_t));
+                                    memset((uint8_t*)&msg, 0, sizeof(message_t));
 
-                                        // blink
-                                        linht_ctrl_green_led_set(true);
-                                        usleep(100e3);
-                                        linht_ctrl_green_led_set(false);
-                                    }
+                                    // blink
+                                    linht_ctrl_green_led_set(true);
+                                    usleep(100e3);
+                                    linht_ctrl_green_led_set(false);
                                 }
                             }
+
+                            // packet complete, the next one starts from frame 0
+                            // and only uses the callsigns of its own LSF
+                            last_fn = -1;
+                            memset(packet_data, 0, sizeof(packet_data));
+                            memset((uint8_t*)&msg, 0, sizeof(message_t));
+                            lsf_valid = false;
                         }
                     }
                     else // if it is LSF
@@ -419,11 +456,12 @@ int main(int argc, char *argv[])
 
                         uint16_t crc = ((uint16_t)lsf.crc[0] << 8) | lsf.crc[1];
 
-                        if (LSF_CRC(&lsf) == crc)
+                        lsf_valid = (LSF_CRC(&lsf) == crc);
+                        if (lsf_valid)
                         {
                             //LSF fields are available here
-                            decode_callsign_bytes((uint8_t*)msg.dst, lsf.dst);
-                            decode_callsign_bytes((uint8_t*)msg.src, lsf.src);
+                            decode_callsign_bytes(msg.dst, lsf.dst);
+                            decode_callsign_bytes(msg.src, lsf.src);
                         }
                     }
 
