@@ -33,7 +33,9 @@ int gpio_init(const char* appname)
     }
     // Configure the settings for our output pin
     gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
-    gpiod_line_settings_set_output_value(settings, 0); // Initial value is LOW
+    // The LED is on when the line is low
+    gpiod_line_settings_set_active_low(settings, true);
+    gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_INACTIVE); // start off
 
     // Create a line config object to hold the settings for lines
     struct gpiod_line_config *line_cfg = gpiod_line_config_new();
@@ -86,6 +88,7 @@ int gpio_init(const char* appname)
     return 0;
 }
 
+// state: 1 = on, 0 = off
 int led(uint8_t state)
 {
     // Set value using gpiod V2 API
@@ -115,25 +118,15 @@ void gpio_cleanup(void)
 
 int main(int argc, char* argv[])
 {
-	gpio_init(argv[0]);
+	if(gpio_init(argv[0]) != 0)
+	{
+		return 1;
+	}
 
-	if(argc==1) //no args given
-	{
-		led(1);
-	}
-	else
-	{
-		if(argv[1][0]=='0')
-		{
-			led(1);
-		}
-		else
-		{
-			led(0);
-		}
-	}
-	
+	// no args given or '0': off, anything else: on
+	int ret = led((argc > 1 && argv[1][0] != '0') ? 1 : 0);
+
 	gpio_cleanup();
 
-	return 0;
+	return ret;
 }

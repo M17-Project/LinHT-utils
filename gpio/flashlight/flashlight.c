@@ -115,25 +115,15 @@ void gpio_cleanup(void)
 
 int main(int argc, char* argv[])
 {
-	gpio_init(argv[0]);
+	if(gpio_init(argv[0]) != 0)
+	{
+		return 1;
+	}
 
-	if(argc==1) //no args given
-	{
-		flash(0);
-	}
-	else
-	{
-		if(argv[1][0]=='0')
-		{
-			flash(0);
-		}
-		else
-		{
-			flash(1);
-		}
-	}
-	
+	// no args given or '0': off, anything else: on
+	int ret = flash((argc > 1 && argv[1][0] != '0') ? 1 : 0);
+
 	gpio_cleanup();
 
-	return 0;
+	return ret;
 }
