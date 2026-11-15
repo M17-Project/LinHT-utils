@@ -7,6 +7,7 @@
 #include <math.h>
 #include <errno.h>
 #include <getopt.h>
+#include <stdbool.h>
 
 #include <sx1255.h>
 
@@ -26,6 +27,33 @@ uint16_t pll_bw;
 sx1255_rate_t rate;
 uint8_t addr;
 uint8_t val;
+
+// SX1255 RF range (datasheet), the frequency register overflows above 512 MHz
+#define FREQ_MIN 400000000L
+#define FREQ_MAX 510000000L
+
+// Parse a whole string as an integer, false on garbage or overflow
+static bool parse_long(const char *s, int base, long *out)
+{
+    char *end;
+    errno = 0;
+    long v = strtol(s, &end, base);
+    if (errno != 0 || end == s || *end != '\0')
+        return false;
+    *out = v;
+    return true;
+}
+
+static bool parse_float(const char *s, float *out)
+{
+    char *end;
+    errno = 0;
+    float v = strtof(s, &end);
+    if (errno != 0 || end == s || *end != '\0')
+        return false;
+    *out = v;
+    return true;
+}
 
 void print_help(const char *program_name)
 {
@@ -125,25 +153,27 @@ int main(int argc, char *argv[])
         case 's':
             if (strlen(optarg) > 0)
             {
-                uint16_t srate = atoi(optarg);
+                long srate = 0;
+                parse_long(optarg, 10, &srate);
                 if (srate == 125)
                 {
-                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    printf("Setting sample rate to %ld kSa/s\n", srate);
                     rate = SX1255_RATE_125K;
                 }
                 else if (srate == 250)
                 {
-                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    printf("Setting sample rate to %ld kSa/s\n", srate);
                     rate = SX1255_RATE_250K;
                 }
                 else if (srate == 500)
                 {
-                    printf("Setting sample rate to %d kSa/s\n", srate);
+                    printf("Setting sample rate to %ld kSa/s\n", srate);
                     rate = SX1255_RATE_500K;
                 }
                 else
                 {
-                    printf("Unsupported rate setting of %d kSa/s. Using 125 kSa/s\n", srate);
+                    printf("Unsupported rate setting of %s kSa/s. Using 125 kSa/s\n", optarg);
+                    rate = SX1255_RATE_125K;
                 }
             }
             else
@@ -164,41 +194,46 @@ int main(int argc, char *argv[])
 
         // rx freq
         case 'r':
-            if (strlen(optarg) > 0)
             {
-                rxf = atoi(optarg);
+                long f;
+                if (!parse_long(optarg, 10, &f) || f < FREQ_MIN || f > FREQ_MAX)
+                {
+                    printf("Invalid RX frequency '%s'. Allowed %ld..%ld Hz, not changed.\n",
+                           optarg, FREQ_MIN, FREQ_MAX);
+                    break;
+                }
+                rxf = (uint32_t)f;
                 printf("Setting RX frequency to %u Hz\n", rxf);
+                if (sx1255_set_rx_freq(rxf) != 0)
+                    printf("RX frequency write failed or the PLL did not lock\n");
             }
-            else
-            {
-                printf("Invalid RX frequency. Using 435000000 Hz.\n");
-                rxf = 435000000;
-            }
-            sx1255_set_rx_freq(rxf);
             break;
 
         // tx freq
         case 't':
-            if (strlen(optarg) > 0)
             {
-                txf = atoi(optarg);
+                long f;
+                if (!parse_long(optarg, 10, &f) || f < FREQ_MIN || f > FREQ_MAX)
+                {
+                    printf("Invalid TX frequency '%s'. Allowed %ld..%ld Hz, not changed.\n",
+                           optarg, FREQ_MIN, FREQ_MAX);
+                    break;
+                }
+                txf = (uint32_t)f;
                 printf("Setting TX frequency to %u Hz\n", txf);
+                if (sx1255_set_tx_freq(txf) != 0)
+                    printf("TX frequency write failed or the PLL did not lock\n");
             }
-            else
-            {
-                printf("Invalid TX frequency. Using 435000000 Hz.\n");
-                txf = 435000000;
-            }
-            sx1255_set_tx_freq(txf);
             break;
     
         // lna gain
         case 'l':
             if (strlen(optarg) > 0)
             {
-                lna_gain = atoi(optarg);
-                if (lna_gain <= 48)
+                long g;
+                if (parse_long(optarg, 10, &g) && g >= 0 && g <= 48)
                 {
+                    lna_gain = (uint8_t)g;
                     printf("Setting LNA gain to %d dB\n", lna_gain);
                 }
                 else
@@ -219,9 +254,10 @@ int main(int argc, char *argv[])
         case 'p':
             if (strlen(optarg) > 0)
             {
-                pga_gain = atoi(optarg);
-                if (pga_gain <= 30)
+                long g;
+                if (parse_long(optarg, 10, &g) && g >= 0 && g <= 30)
                 {
+                    pga_gain = (uint8_t)g;
                     printf("Setting PGA gain to %d dB\n", pga_gain);
                 }
                 else
@@ -242,14 +278,15 @@ int main(int argc, char *argv[])
         case 'd':
             if (strlen(optarg) > 0)
             {
-                dac_gain = atoi(optarg);
-                if (dac_gain == 0 || dac_gain == -3 || dac_gain == -6 || dac_gain == -9)
+                long g;
+                if (parse_long(optarg, 10, &g) && (g == 0 || g == -3 || g == -6 || g == -9))
                 {
+                    dac_gain = (int8_t)g;
                     printf("Setting DAC gain to %d dB\n", dac_gain);
                 }
                 else
                 {
-                    printf("Unsupported DAC gain setting of %d dB. Using -3 dB.\n", dac_gain);
+                    printf("Unsupported DAC gain setting of %s dB. Using -3 dB.\n", optarg);
                     dac_gain = -3;
                 }
             }
@@ -265,8 +302,7 @@ int main(int argc, char *argv[])
         case 'm':
             if (strlen(optarg) > 0)
             {
-                mix_gain = atof(optarg);
-                if (mix_gain >= -37.5 && mix_gain <= -7.5)
+                if (parse_float(optarg, &mix_gain) && mix_gain >= -37.5 && mix_gain <= -7.5)
                 {
                     printf("Setting mixer gain to %.1f dB\n", mix_gain);
                 }
@@ -288,9 +324,10 @@ int main(int argc, char *argv[])
         case 'a':
             if (strlen(optarg) > 0)
             {
-                pll_bw = atof(optarg);
-                if (pll_bw >= 75 && pll_bw <= 300)
+                long bw;
+                if (parse_long(optarg, 10, &bw) && bw >= 75 && bw <= 300)
                 {
+                    pll_bw = (uint16_t)bw;
                     printf("Setting RX PLL bandwidth to %d kHz\n", (pll_bw/75)*75);
                 }
                 else
@@ -311,9 +348,10 @@ int main(int argc, char *argv[])
         case 'b':
             if (strlen(optarg) > 0)
             {
-                pll_bw = atof(optarg);
-                if (pll_bw >= 75 && pll_bw <= 300)
+                long bw;
+                if (parse_long(optarg, 10, &bw) && bw >= 75 && bw <= 300)
                 {
+                    pll_bw = (uint16_t)bw;
                     printf("Setting TX PLL bandwidth to %d kHz\n", (pll_bw/75)*75);
                 }
                 else
@@ -334,7 +372,7 @@ int main(int argc, char *argv[])
         case 'T':
             if (strlen(optarg) > 0)
             {
-                val = atoi(optarg);
+                val = (atoi(optarg) != 0);
                 if (val == 0)
                 {
                     sx1255_enable_tx(false);
@@ -356,7 +394,7 @@ int main(int argc, char *argv[])
         case 'R':
             if (strlen(optarg) > 0)
             {
-                val = atoi(optarg);
+                val = (atoi(optarg) != 0);
                 if (val == 0)
                 {
                     sx1255_enable_rx(false);
@@ -385,7 +423,7 @@ int main(int argc, char *argv[])
         case 'L':
             if (strlen(optarg) > 0)
             {
-                val = atoi(optarg);
+                val = (atoi(optarg) != 0);
                 if (val == 0)
                 {
                     sx1255_enable_rf_loopback(false);
@@ -407,13 +445,12 @@ int main(int argc, char *argv[])
         case 'G':
             if (strlen(optarg) > 0)
             {
-                if (strstr(optarg, "0x") != NULL)
-                    addr = strtol(optarg, NULL, 16);
-                else
-                    addr = atoi(optarg);
-
-                if (addr <= 0x13)
+                long a;
+                if (parse_long(optarg, 0, &a) && a >= 0 && a <= 0x13)
+                {
+                    addr = (uint8_t)a;
                     printf("Register 0x%02X value: 0x%02X\n", addr, sx1255_read_reg(addr));
+                }
                 else
                     printf("Register readout error: address out of range.\n");
             }
@@ -427,12 +464,25 @@ int main(int argc, char *argv[])
         case 'S':
             if (strlen(optarg) > 0)
             {
-                addr = strtol(optarg, NULL, 16);
-                val = strtol(strstr(optarg, ",") + 1, NULL, 16);
-
-                if (addr <= 0x13)
+                char *comma = strchr(optarg, ',');
+                long a, v;
+                if (!comma)
                 {
-                    printf("Seting register 0x%02X to 0x%02X\n", addr, val);
+                    printf("Register write error: expected ADDR,VAL.\n");
+                    break;
+                }
+                *comma = '\0';
+                if (!parse_long(optarg, 16, &a) || !parse_long(comma + 1, 16, &v) || v < 0 || v > 0xFF)
+                {
+                    printf("Register write error: invalid address or value.\n");
+                    break;
+                }
+
+                if (a >= 0 && a <= 0x13)
+                {
+                    addr = (uint8_t)a;
+                    val = (uint8_t)v;
+                    printf("Setting register 0x%02X to 0x%02X\n", addr, val);
                     sx1255_write_reg(addr, val);
                 }
                 else
