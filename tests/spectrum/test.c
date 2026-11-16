@@ -173,6 +173,7 @@ int main(void)
 	{
 		return rval;
 	}
+	fcntl(kbd, F_SETFL, fcntl(kbd, F_GETFL, 0) | O_NONBLOCK); // non-blocking access
 	
 	// execute FFT generating flowgraph
 	fprintf(stderr, "Executing flowgraph...\n");
@@ -230,33 +231,31 @@ int main(void)
     // Main loop
     while (!WindowShouldClose())
     {
+		// handle every pending key event, not just one per frame
 		struct input_event ev;
-		fcntl(kbd, F_SETFL, fcntl(kbd, F_GETFL, 0) | O_NONBLOCK); //non-blocking access
-		ssize_t n = read(kbd, &ev, sizeof(ev));
-		if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
+		bool quit = false;
+		while (!quit && read(kbd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev))
 		{
-			if (ev.value == KEY_PRESS)
+			if (ev.type != EV_KEY || ev.value != KEY_PRESS)
+				continue;
+
+			if (ev.code == KEY_UP)
 			{
-				if (ev.code == KEY_UP)
-				{
-					freq_a += 12500;
-					sx1255_set_rx_freq(freq_a);
-				}
-				else if (ev.code == KEY_DOWN)
-				{
-					freq_a -= 12500;
-					sx1255_set_rx_freq(freq_a);
-				}
-				else if (ev.code == KEY_ESC)
-				{
-					break;
-				}
-				else
-				{
-					;
-				}
+				freq_a += 12500;
+				sx1255_set_rx_freq(freq_a);
+			}
+			else if (ev.code == KEY_DOWN)
+			{
+				freq_a -= 12500;
+				sx1255_set_rx_freq(freq_a);
+			}
+			else if (ev.code == KEY_ESC)
+			{
+				quit = true;
 			}
 		}
+		if (quit)
+			break;
 		
 		// read FFT data
 		//fseek(fspec, 0, SEEK_SET);
