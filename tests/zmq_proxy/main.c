@@ -42,6 +42,10 @@ state_t radio_state = STATE_RX;
 // set by SIGINT/SIGTERM, the main loop exits and cleans up
 static volatile sig_atomic_t stop_requested = 0;
 
+// set on an ALSA error that recovery can not fix, the program exits with an
+// error and systemd restarts it (Restart=on-failure)
+static int fatal_error = 0;
+
 static void stop_handler(int sig)
 {
 	(void)sig;
@@ -77,9 +81,10 @@ static void cleanup(void)
 
 uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 {
-	pmt[0] = 2;									 // pmt type - zmq message
-	*((uint16_t *)&pmt[1]) = htons(strlen(msg)); // length
-	strcpy((char *)&pmt[3], msg);
+	uint16_t len = htons(strlen(msg));
+	pmt[0] = 2;					// pmt type - zmq message
+	memcpy(&pmt[1], &len, 2);	// length, big endian (pmt+1 is not aligned)
+	memcpy(&pmt[3], msg, strlen(msg));
 
 	return 3 + strlen(msg);
 }
@@ -87,6 +92,45 @@ uint8_t string_to_pmt(uint8_t *pmt, const char *msg)
 int64_t time_diff_us(struct timeval a, struct timeval b)
 {
     return (a.tv_sec - b.tv_sec)*1000000L + (a.tv_usec - b.tv_usec);
+}
+
+// Write one block (ZMQ_LEN/2 frames) to the TX device.
+// Returns 0 when it was written, 1 when the device did not accept data within
+// 100 ms (e.g. no I2S clock from the SX1255) or a signal arrived, -1 on an
+// error that recovery can not fix. Without the timeout, a missing clock would
+// block snd_pcm_writei() forever and EOT would never be handled.
+static int tx_write_block(const int32_t *p)
+{
+	snd_pcm_uframes_t left = ZMQ_LEN / 2;
+
+	while (left > 0 && !stop_requested)
+	{
+		int w = snd_pcm_wait(bsb_tx, 100);
+		if (w == 0)
+			return 1;
+		if (w < 0)
+		{
+			if (snd_pcm_recover(bsb_tx, w, 1) < 0)
+				return -1;
+			continue;
+		}
+
+		snd_pcm_sframes_t written = snd_pcm_writei(bsb_tx, p, left);
+		if (written < 0)
+		{
+			if (written == -EAGAIN)
+				continue;
+			if (snd_pcm_recover(bsb_tx, (int)written, 1) < 0)
+				return -1;
+			continue;
+		}
+
+		// a short write (e.g. interrupted by a signal) continues where it stopped
+		p    += (size_t)written * 2; // 2 samples (I, Q) per frame
+		left -= (snd_pcm_uframes_t)written;
+	}
+
+	return (left == 0) ? 0 : 1;
 }
 
 void tx_stop_cleanup(void)
@@ -128,9 +172,14 @@ int main(void)
 	sigaction(SIGTERM, &sa, NULL); // systemd stops the service with SIGTERM
 	
 	zmq_ctx = zmq_ctx_new();
-    zmq_pub = zmq_socket(zmq_ctx, ZMQ_PUB);
-	zmq_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
-	zmq_ptt_sub = zmq_socket(zmq_ctx, ZMQ_SUB);
+	zmq_pub = zmq_ctx ? zmq_socket(zmq_ctx, ZMQ_PUB) : NULL;
+	zmq_sub = zmq_ctx ? zmq_socket(zmq_ctx, ZMQ_SUB) : NULL;
+	zmq_ptt_sub = zmq_ctx ? zmq_socket(zmq_ctx, ZMQ_SUB) : NULL;
+	if (!zmq_pub || !zmq_sub || !zmq_ptt_sub)
+	{
+		fprintf(stderr, "ZeroMQ: can not create the sockets.\nExiting.\n");
+		return -1;
+	}
 	zmq_setsockopt(zmq_sub, ZMQ_SUBSCRIBE, "", 0); // no filters
 	zmq_setsockopt(zmq_ptt_sub, ZMQ_SUBSCRIBE, "", 0); // no filters
 	
@@ -256,7 +305,12 @@ int main(void)
 			int w = snd_pcm_wait(bsb_rx, 100);
 			if (w < 0)
 			{
-				snd_pcm_recover(bsb_rx, w, 1);
+				if (snd_pcm_recover(bsb_rx, w, 1) < 0)
+				{
+					fprintf(stderr, "RX: unrecoverable error: %s\n", snd_strerror(w));
+					fatal_error = 1;
+					break;
+				}
 				continue;
 			}
 			else if (w == 0)
@@ -268,14 +322,15 @@ int main(void)
 
 			snd_pcm_sframes_t n = snd_pcm_readi(bsb_rx, rx_buff, ZMQ_LEN/2);
 
-			if (n == -EPIPE)
+			if (n < 0)
 			{
-				snd_pcm_recover(bsb_rx, n, 1);
-				continue;
-			}
-			else if (n < 0)
-			{
-				snd_pcm_recover(bsb_rx, n, 1);
+				// overrun (-EPIPE), suspend or signal: recover and read again
+				if (snd_pcm_recover(bsb_rx, (int)n, 1) < 0)
+				{
+					fprintf(stderr, "RX: unrecoverable error: %s\n", snd_strerror((int)n));
+					fatal_error = 1;
+					break;
+				}
 				continue;
 			}
 			else if ((uint32_t)n < ZMQ_LEN/2)
@@ -299,54 +354,45 @@ int main(void)
 			{
 				int r = zmq_recv(zmq_sub, (uint8_t*)tx_buff, sizeof(tx_buff), 0); // blocking is fine here
 
+				// zmq_recv() returns the full message size, but stores at most
+				// sizeof(tx_buff) bytes: never read past what was stored
+				if (r > (int)sizeof(tx_buff))
+				{
+					fprintf(stderr, "TX: %d-byte message truncated to %d bytes\n", r, (int)sizeof(tx_buff));
+					r = (int)sizeof(tx_buff);
+				}
+
 				if (r > 0)
 				{
-					// optional: sanity-check packet size
-					/*if (r % BYTES_PER_PERIOD != 0)
-					{
-						fprintf(stderr, "TX: unexpected packet size %d bytes (not multiple of %d)\n",
-								r, (int)BYTES_PER_PERIOD);
-					}*/
-
 					int bytes_left = r;
-					uint8_t *p = (uint8_t*)tx_buff;
+					const int32_t *p = tx_buff;
 
 					// write all full periods contained in this ZMQ message
 					while (bytes_left >= (int)BYTES_PER_PERIOD && radio_state == STATE_TX && !stop_requested)
 					{
-						snd_pcm_sframes_t written;
+						int ret = tx_write_block(p);
 
-						do
+						if (ret < 0)
 						{
-							written = snd_pcm_writei(
-								bsb_tx,
-								(int32_t*)p,      // start of this period
-								ZMQ_LEN / 2       // frames per period
-							);
-
-							// underrun (-EPIPE), suspend or signal: recover and retry
-							if (written < 0 && snd_pcm_recover(bsb_tx, written, 1) < 0)
-								break; // unrecoverable, give up on this period
+							fprintf(stderr, "TX: unrecoverable error, exiting\n");
+							fatal_error = 1;
+							break;
 						}
-						while (written < 0 && !stop_requested);
-
-						if (written < 0)
+						if (ret > 0)
 						{
-							// drop the rest of this message and go back to
-							// the main loop, so PTT messages are still handled
+							// no clock or a signal: drop the rest of this message
+							// and go back to the main loop, so EOT is still handled
 							if (!stop_requested)
-								fprintf(stderr, "TX: write failed: %s\n", snd_strerror((int)written));
+								fprintf(stderr, "TX: device not ready, dropping %d bytes\n", bytes_left);
 							break;
 						}
 
-						// ALSA should either block until this period is played,
-						// or recover and retry, so when we get here this period is "consumed".
-						p          += BYTES_PER_PERIOD;
+						p          += ZMQ_LEN;
 						bytes_left -= BYTES_PER_PERIOD;
 					}
 
-					// any leftover bytes (less than one full period) are ignored for now;
-					// if you ever see 'r' not equal to BYTES_PER_PERIOD, fix the sender.
+					// any leftover bytes (less than one full period) are ignored,
+					// the sender has to send whole periods
 				}
 			}
 
@@ -362,8 +408,11 @@ int main(void)
 				}
 			}*/
 		}
+
+		if (fatal_error)
+			break;
 	}
 	
 	cleanup();
-	return 0;
+	return fatal_error ? 1 : 0;
 }
