@@ -28,6 +28,12 @@ static const size_t ZMQ_LEN_INTS = 2048;  // 2048 int32_t = 1024 complex samples
 static const size_t ZMQ_COMPLEX_SAMPLES = ZMQ_LEN_INTS / 2;
 static const double LINHT_SAMPLE_RATE = 500000.0; // 500 kSa/s
 static const double LINHT_CENTER_FREQ = 433.475e6;
+// Receive queue limit in ZMQ blocks: 64 x 1024 samples = 131 ms at 500 kSa/s,
+// instead of the default 1000 blocks (about 2 s). The publisher keeps its own
+// queue in front of this one, so a slow client can still see older samples.
+// Excess blocks are dropped by ZMQ, and as the blocks carry no sequence
+// numbers, such drops can not be reported as overflows.
+static const int LINHT_ZMQ_RCVHWM = 64;
 // Tuning range offered by this driver (70 cm band, the SX1255 covers 400..510 MHz)
 static const double LINHT_FREQ_MIN = 420.0e6;
 static const double LINHT_FREQ_MAX = 470.0e6;
@@ -349,6 +355,16 @@ public:
         st->dc_i = st->dc_q = 0.0f;
         st->fifo.clear();
 
+        // drop blocks queued while the stream was inactive (on both sides of
+        // the connection), the client wants samples from now on. Bounded,
+        // as new blocks keep arriving: 4096 blocks are about 8 s of samples.
+        int32_t junk[ZMQ_LEN_INTS];
+        for (int i = 0; i < 4096; i++)
+        {
+            if (zmq_recv(zmqSub, junk, sizeof(junk), ZMQ_DONTWAIT) < 0)
+                break;
+        }
+
         return 0;
     }
 
@@ -568,12 +584,14 @@ LinHTZmqDevice::LinHTZmqDevice(const SoapySDR::Kwargs &args)
         throw std::runtime_error("LinHTZmq: failed to create ZMQ SUB socket");
     }
 
-    int rc = zmq_setsockopt(zmqSub, ZMQ_SUBSCRIBE, "", 0);
+    int rc = zmq_setsockopt(zmqSub, ZMQ_RCVHWM, &LINHT_ZMQ_RCVHWM, sizeof(LINHT_ZMQ_RCVHWM));
+    if(rc == 0)
+        rc = zmq_setsockopt(zmqSub, ZMQ_SUBSCRIBE, "", 0);
     if(rc != 0)
     {
         zmq_close(zmqSub);
         zmq_ctx_term(zmqCtx);
-        throw std::runtime_error("LinHTZmq: zmq_setsockopt(ZMQ_SUBSCRIBE) failed");
+        throw std::runtime_error("LinHTZmq: zmq_setsockopt(ZMQ_RCVHWM/ZMQ_SUBSCRIBE) failed");
     }
 
     rc = zmq_connect(zmqSub, endpoint.c_str());
