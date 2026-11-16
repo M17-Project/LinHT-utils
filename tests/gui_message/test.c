@@ -287,36 +287,23 @@ int main(void)
 	Font customFont10 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 10, 0, 250);
 	Font customFont12 = LoadFontEx("/usr/share/linht/fonts/UbuntuCondensed-Regular.ttf", 12, 0, 250);
     
-	//load the wallpaper
-    img = LoadImage("/usr/share/linht/icons/wallpaper.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[0] = LoadTextureFromImage(img);
-	
-	img = LoadImage("/usr/share/linht/icons/mute.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[1] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/gnss.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[2] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/batt_100.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[3] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/vfo_act.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[4] = LoadTextureFromImage(img);
-
-	img = LoadImage("/usr/share/linht/icons/vfo_inact.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[5] = LoadTextureFromImage(img);
-
-    img = LoadImage("/usr/share/linht/icons/envelope.png");
-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-    texture[6] = LoadTextureFromImage(img);
-
-	UnloadImage(img);
+	// load the icons, each image is freed once its texture exists
+	const char *icons[] = {
+		"/usr/share/linht/icons/wallpaper.png",
+		"/usr/share/linht/icons/mute.png",
+		"/usr/share/linht/icons/gnss.png",
+		"/usr/share/linht/icons/batt_100.png",
+		"/usr/share/linht/icons/vfo_act.png",
+		"/usr/share/linht/icons/vfo_inact.png",
+		"/usr/share/linht/icons/envelope.png"
+	};
+	for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++)
+	{
+		img = LoadImage(icons[i]);
+		ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+		texture[i] = LoadTextureFromImage(img);
+		UnloadImage(img);
+	}
     
     // Set low FPS for embedded display
     SetTargetFPS(5);
