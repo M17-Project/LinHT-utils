@@ -17,7 +17,10 @@
 #define KEY_RELEASE 0
 
 int kbd;
+// keypad: the stable udev symlink, or event0 on images without it (since the
+// power key driver takes event0, event0 is no longer the keypad on new images)
 const char *kbd_path = "/dev/input/event0";
+const char *kbd_link = "/dev/input/keypad";
 const char *zmq_ipc = "ipc:///tmp/ptt_msg";
 
 uint8_t sot_pmt[10];
@@ -90,6 +93,10 @@ int main(int argc, char *argv[])
     int option_index = 0;
 
     // Parse command line arguments
+    // default keypad device, -k overrides it
+    if (access(kbd_link, F_OK) == 0)
+        kbd_path = kbd_link;
+
     while ((opt = getopt_long(argc, argv, arglist, long_options, &option_index)) != -1)
     {
         switch (opt)

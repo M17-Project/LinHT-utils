@@ -82,7 +82,10 @@ uint32_t *framebuffer; // framebuffer
 uint16_t cnt;
 
 // keyboard
+// keypad: the stable udev symlink, or event0 on images without it (since the
+// power key driver takes event0, event0 is no longer the keypad on new images)
 const char *kbd_path = "/dev/input/event0";
+const char *kbd_link = "/dev/input/keypad";
 int kbd; // keyboard file handle
 uint16_t last_pressed[12];
 const uint16_t key_seq_1[] = {KEY_UP, KEY_UP, KEY_DOWN, KEY_DOWN,
@@ -1036,6 +1039,8 @@ int main(void)
 	}
 
 	// keyboard
+	if (access(kbd_link, F_OK) == 0)
+		kbd_path = kbd_link;
 	if ((rval = kbd_init(&kbd, kbd_path)) != 0)
 	{
 		return rval;
