@@ -422,7 +422,7 @@ void displayMessage(const char *src, const char *dst, const char *msg)
 {
 	char src_line[32], dst_line[32];
 
-	sprintf(src_line, "From: %s\n", src);
+	snprintf(src_line, sizeof(src_line), "From: %s\n", src);
 	(void)dst;
 	(void)dst_line;
 
@@ -448,117 +448,158 @@ static inline uint32_t rd_u32(const uint8_t *p)
 	return v;
 }
 
-// extract message data (SRC, DST, TYPE, META, SMS)
-void getMsgData(char *src, char *dst, uint16_t *type, uint8_t meta[14], char *msg, const uint8_t *buf, size_t len)
-{
-	uint16_t idx = 0;
-	uint32_t field_len = 0;
-	char key[16] = {0};
+// serialized PMT tags (GNU Radio pmt_serial_tags)
+#define PST_TRUE		0x00
+#define PST_FALSE		0x01
+#define PST_SYMBOL		0x02
+#define PST_INT32		0x03
+#define PST_DOUBLE		0x04
+#define PST_COMPLEX		0x05
+#define PST_NULL		0x06
+#define PST_PAIR		0x07
+#define PST_DICT		0x09
+#define PST_UNIFORM_VECTOR	0x0A
+#define PST_UINT64		0x0B
+#define PST_INT64		0x0D
 
-	if (src != NULL)
+// item size of a serialized uniform vector, 0 for an unknown item type
+static size_t uvec_item_size(uint8_t utype)
+{
+	static const uint8_t sizes[] = {1, 1, 2, 2, 4, 4, 8, 8, 4, 8, 8, 16}; // u8 s8 u16 s16 u32 s32 u64 s64 f32 f64 c32 c64
+	return (utype < sizeof(sizes)) ? sizes[utype] : 0;
+}
+
+// copy a length-delimited string into a NUL-terminated buffer of 'size' bytes
+static void copy_field(char *dst, size_t size, const uint8_t *src, size_t len)
+{
+	if (dst == NULL || size == 0)
+		return;
+	if (len > size - 1)
+		len = size - 1;
+	memcpy(dst, src, len);
+	dst[len] = 0;
+}
+
+// Extract message data (SRC, DST, TYPE, META, SMS) from a serialized PMT
+// dict, as published by the gr-m17 decoder. Every read is bounds checked.
+// Unknown keys are skipped by their value type, parsing stops at the end of
+// the dict or at anything it can not interpret.
+void getMsgData(char *src, size_t src_size, char *dst, size_t dst_size, uint16_t *type,
+				uint8_t meta[14], char *msg, size_t msg_size, const uint8_t *buf, size_t len)
+{
+	size_t idx = 0;
+
+	if (src != NULL && src_size > 0)
 		src[0] = 0;
-	if (dst != NULL)
+	if (dst != NULL && dst_size > 0)
 		dst[0] = 0;
-	if (msg != NULL)
+	if (msg != NULL && msg_size > 0)
 		msg[0] = 0;
+	if (meta != NULL)
+		memset(meta, 0, 14);
 	if (type != NULL)
 		*type = 0xFFFF;
 
-	// NOTE: the parser below is based on reverse-engineered PMT format...
-	// TODO: fix it
-	while (idx < len - 1)
+	while (idx < len)
 	{
-		if (buf[idx] == 0x09) // 0x09 - PMT_PAIR
+		// dict structure: DICT, PAIR, key, value, ... NULL
+		if (buf[idx] == PST_DICT || buf[idx] == PST_PAIR)
 		{
 			idx++;
-			// omit serialization depth marker byte
-			idx++;
+			continue;
 		}
-		else if (buf[idx] == 0x02) // 0x02 - PMT_SYMBOL
+		if (buf[idx] != PST_SYMBOL) // end of the dict (PST_NULL) or not understood
+			break;
+
+		// key
+		if (idx + 3 > len)
+			break;
+		size_t key_len = rd_u16(&buf[idx + 1]);
+		idx += 3;
+		if (idx + key_len > len)
+			break;
+		const uint8_t *key = &buf[idx];
+		idx += key_len;
+
+		if (idx >= len)
+			break;
+		uint8_t tag = buf[idx++];
+
+		if (tag == PST_SYMBOL) // string value
 		{
-			idx++;
-			field_len = rd_u16(&buf[idx]);
+			if (idx + 2 > len)
+				break;
+			size_t vlen = rd_u16(&buf[idx]);
 			idx += 2;
-			memset(key, 0, field_len + 1); // +1 for the terminating null
-			memcpy(key, &buf[idx], field_len);
-			idx += field_len;
-			if (memcmp(key, "src", 3) == 0)
-			{
-				idx++; // omit the 0x02 byte for the value field of this pair
-				field_len = rd_u16(&buf[idx]);
-				idx += 2;
-				if (src != NULL)
-				{
-					memset(src, 0, field_len + 1); // +1 for the terminating null
-					memcpy(src, &buf[idx], field_len);
-				}
-				idx += field_len;
-			}
-			else if (memcmp(key, "dst", 3) == 0)
-			{
-				idx++; // omit the 0x02 byte for the value field of this pair
-				field_len = rd_u16(&buf[idx]);
-				idx += 2;
-				if (dst != NULL)
-				{
-					memset(dst, 0, field_len + 1); // +1 for the terminating null
-					memcpy(dst, &buf[idx], field_len);
-				}
-				idx += field_len;
-			}
-			else if (memcmp(key, "sms", 3) == 0)
-			{
-				idx++; // omit the 0x02 byte for the value field of this pair
-				field_len = rd_u16(&buf[idx]);
-				idx += 2;
-				if (msg != NULL)
-				{
-					memset(msg, 0, field_len + 1); // +1 for the terminating null
-					memcpy(msg, &buf[idx], field_len);
-				}
-				idx += field_len;
-			}
-			else if (memcmp(key, "type", 4) == 0)
-			{
-				idx++; // omit the 0x0A byte for the value field of this pair
-				idx++; // omit 1 byte
-				field_len = rd_u32(&buf[idx]);
-				idx += 4;
-				idx += 2; // omit 2 bytes
-				if (type != NULL)
-					*type = ((uint16_t)buf[idx] << 8) | buf[idx + 1]; // expected 2 bytes
-				idx += field_len;
-			}
-			else if (memcmp(key, "meta", 4) == 0)
-			{
-				idx++; // omit the 0x0A byte for the value field of this pair
-				idx++; // omit 1 byte
-				field_len = rd_u32(&buf[idx]);
-				idx += 4;
-				idx += 2; // omit 2 bytes
-				if (meta != NULL)
-					memcpy(meta, &buf[idx], field_len);
-				idx += field_len;
-			}
-			else // unexpected key
-			{
-				; // TODO: handle this properly
-			}
+			if (idx + vlen > len)
+				break;
+
+			if (key_len == 3 && memcmp(key, "src", 3) == 0)
+				copy_field(src, src_size, &buf[idx], vlen);
+			else if (key_len == 3 && memcmp(key, "dst", 3) == 0)
+				copy_field(dst, dst_size, &buf[idx], vlen);
+			else if (key_len == 3 && memcmp(key, "sms", 3) == 0)
+				copy_field(msg, msg_size, &buf[idx], vlen);
+
+			idx += vlen;
 		}
+		else if (tag == PST_UNIFORM_VECTOR) // item type, count, padding, items
+		{
+			if (idx + 6 > len)
+				break;
+			size_t isize = uvec_item_size(buf[idx]);
+			size_t count = rd_u32(&buf[idx + 1]);
+			size_t npad = buf[idx + 5];
+			idx += 6 + npad;
+			if (isize == 0 || count > len || idx > len || idx + count * isize > len)
+				break;
+
+			if (isize == 1 && key_len == 4 && memcmp(key, "type", 4) == 0)
+			{
+				if (type != NULL && count >= 2)
+					*type = ((uint16_t)buf[idx] << 8) | buf[idx + 1];
+			}
+			else if (isize == 1 && key_len == 4 && memcmp(key, "meta", 4) == 0)
+			{
+				if (meta != NULL)
+					memcpy(meta, &buf[idx], (count < 14) ? count : 14);
+			}
+
+			idx += count * isize;
+		}
+		else if (tag == PST_TRUE || tag == PST_FALSE || tag == PST_NULL)
+			;
+		else if (tag == PST_INT32)
+			idx += 4;
+		else if (tag == PST_DOUBLE || tag == PST_UINT64 || tag == PST_INT64)
+			idx += 8;
+		else if (tag == PST_COMPLEX)
+			idx += 16;
+		else // value type not understood, the rest can not be parsed
+			break;
 	}
 
-	if (src != NULL)
-		if (src[0] == 0)
-			strcpy(src, "<unknown>");
-	if (dst != NULL)
-		if (dst[0] == 0)
-			strcpy(dst, "<unknown>");
-	if (msg != NULL)
-		if (msg[0] == 0)
-			strcpy(msg, "<empty>");
+	if (src != NULL && src_size > 0 && src[0] == 0)
+		snprintf(src, src_size, "<unknown>");
+	if (dst != NULL && dst_size > 0 && dst[0] == 0)
+		snprintf(dst, dst_size, "<unknown>");
 }
 
 // message database handlers
+// releases everything db_init() set up, safe to call more than once
+void db_cleanup(void)
+{
+	sqlite3_finalize(insert_msg_stmt);
+	sqlite3_finalize(count_msg_stmt);
+	sqlite3_finalize(unread_msg_count_stmt);
+	sqlite3_close(msg_db);
+	insert_msg_stmt = NULL;
+	count_msg_stmt = NULL;
+	unread_msg_count_stmt = NULL;
+	msg_db = NULL;
+}
+
+// opens the database into msg_db (db must point to it)
 int db_init(sqlite3 **db, const char *db_path)
 {
 	char *err_msg = NULL;
@@ -566,6 +607,7 @@ int db_init(sqlite3 **db, const char *db_path)
 	if (sqlite3_open(db_path, db) != SQLITE_OK)
 	{
 		fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(*db));
+		db_cleanup();
 		return 1;
 	}
 
@@ -589,7 +631,7 @@ int db_init(sqlite3 **db, const char *db_path)
 	{
 		fprintf(stderr, "Failed to ensure table exists: %s\n", err_msg);
 		sqlite3_free(err_msg);
-		sqlite3_close(*db);
+		db_cleanup();
 		return 1;
 	}
 
@@ -600,7 +642,7 @@ int db_init(sqlite3 **db, const char *db_path)
 	if (sqlite3_prepare_v2(*db, sql, -1, &insert_msg_stmt, 0) != SQLITE_OK)
 	{
 		fprintf(stderr, "Failed to prepare placeholder statement: %s\n", sqlite3_errmsg(*db));
-		sqlite3_close(*db);
+		db_cleanup();
 		return 1;
 	}
 
@@ -610,6 +652,7 @@ int db_init(sqlite3 **db, const char *db_path)
 	if (sqlite3_prepare_v2(*db, sql2, -1, &count_msg_stmt, 0) != SQLITE_OK)
 	{
 		fprintf(stderr, "Failed to prepare count statement: %s\n", sqlite3_errmsg(*db));
+		db_cleanup();
 		return 1;
 	}
 
@@ -619,22 +662,19 @@ int db_init(sqlite3 **db, const char *db_path)
 	if (sqlite3_prepare_v2(*db, sql3, -1, &unread_msg_count_stmt, 0) != SQLITE_OK)
 	{
 		fprintf(stderr, "Failed to prepare unread count statement: %s\n", sqlite3_errmsg(*db));
+		db_cleanup();
 		return 1;
 	}
 
 	return 0;
 }
 
-void db_cleanup(void)
-{
-	sqlite3_finalize(insert_msg_stmt);
-	sqlite3_finalize(count_msg_stmt);
-	sqlite3_finalize(unread_msg_count_stmt);
-	sqlite3_close(msg_db);
-}
 
 int push_message(message_t *msg)
 {
+	if (insert_msg_stmt == NULL) // no database
+		return 1;
+
 	sqlite3_clear_bindings(insert_msg_stmt);
 
 	sqlite3_bind_int64(insert_msg_stmt, 1, (sqlite3_int64)msg->timestamp);				   // timestamp (seconds since epoch)
@@ -661,6 +701,9 @@ int get_message_count(void)
 {
 	int count = -1;
 
+	if (count_msg_stmt == NULL) // no database
+		return count;
+
 	sqlite3_reset(count_msg_stmt);
 
 	int retval = sqlite3_step(count_msg_stmt);
@@ -676,6 +719,9 @@ int get_message_count(void)
 int get_unread_message_count(void)
 {
 	int count = -1;
+
+	if (unread_msg_count_stmt == NULL) // no database
+		return count;
 
 	sqlite3_reset(unread_msg_count_stmt);
 
@@ -701,14 +747,19 @@ void m17_send_sms(const char *msg)
 	zmq_send(zmq_ptt_pub, sot_pmt, pmt_len, 0); // notify the ZMQ proxy
 	usleep(50 * 1000); // let the proxy switch
 	
-	// "SMS":"msg" PMT pair
-	uint8_t pmt[1024] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
-	memcpy(&pmt[10], msg, strlen(msg)); // TODO: add 821-char limit
-	uint16_t l = htons(strlen(msg));	// length
-	memcpy(&pmt[8], &l, sizeof(l));
-	zmq_send(zmq_fg_pub, pmt, 8 + 2 + l, 0); // trigger baseband generation
+	// "SMS":"msg" PMT pair, the text is limited to what one M17 packet holds:
+	// 33 frames of 25 bytes = 825, minus the type byte, the NUL and the CRC
+	size_t msg_len = strlen(msg);
+	if (msg_len > 821)
+		msg_len = 821;
 
-	usleep(((3 + (1 + strlen(msg) + 1 + 2) / 25) * 40 + 20) * 1000); // 20ms extra
+	uint8_t pmt[10 + 821] = {0x07, 0x02, 0x00, 0x03, 0x53, 0x4D, 0x53, 0x02};
+	pmt[8] = (uint8_t)(msg_len >> 8); // length, big endian
+	pmt[9] = (uint8_t)(msg_len & 0xFF);
+	memcpy(&pmt[10], msg, msg_len);
+	zmq_send(zmq_fg_pub, pmt, 10 + msg_len, 0); // trigger baseband generation
+
+	usleep(((3 + (1 + msg_len + 1 + 2) / 25) * 40 + 20) * 1000); // 20ms extra
 
 	// transmission end
 	zmq_send(zmq_ptt_pub, eot_pmt, pmt_len, 0); // notify the ZMQ proxy
@@ -755,6 +806,12 @@ void fg_check(void)
 
 	// restart
 	fg_pid = fork();
+	if (fg_pid < 0)
+	{
+		perror("fork");
+		fg_pid = 0; // never kill(-1, ...) at exit
+		return;
+	}
 	if (fg_pid == 0)
 	{
 		int devnull = open("/dev/null", O_WRONLY);
@@ -979,11 +1036,16 @@ int main(void)
 	fg_path = conf->channels.vfo_0.fg;
 	fprintf(stderr, "Executing GNU Radio flowgraph (%s)\n", fg_path);
 
-	snprintf(offs_str, sizeof(offs_str), "%.4f+%.4fj", conf->settings.rf.i_dc, conf->settings.rf.q_dc);
+	snprintf(offs_str, sizeof(offs_str), "%.4f%+.4fj", conf->settings.rf.i_dc, conf->settings.rf.q_dc);
 	snprintf(can_str, sizeof(can_str), "%d", conf->channels.vfo_0.extra.can);
 
 	fg_pid = fork();
-	if (fg_pid == 0)
+	if (fg_pid < 0)
+	{
+		perror("fork");
+		fg_pid = 0; // never kill(-1, ...) at exit
+	}
+	else if (fg_pid == 0)
 	{
 		// child process
 		// open /dev/null
@@ -1032,12 +1094,19 @@ int main(void)
 		int rc = zmq_poll(items, 1, 0); // timeout 0 = non-blocking
 		if (rc > 0 && (items[0].revents & ZMQ_POLLIN))
 		{
-			uint8_t buf[1024];
+			// a full 821-byte SMS plus the other fields is about 900 bytes
+			uint8_t buf[2048];
 			int len = zmq_recv(zmq_sub, buf, sizeof(buf), 0);
-			if (len > 0)
+			if (len > (int)sizeof(buf))
+			{
+				// zmq_recv() returns the full size but stored only sizeof(buf)
+				fprintf(stderr, "Dropped a %d-byte message from the flowgraph (too long)\n", len);
+			}
+			else if (len > 0)
 			{
 				uint16_t type;
-				getMsgData(msg.src, msg.dst, &type, msg.meta, msg.message, buf, len);
+				getMsgData(msg.src, sizeof(msg.src), msg.dst, sizeof(msg.dst), &type,
+						   msg.meta, msg.message, sizeof(msg.message), buf, (size_t)len);
 
 				// save to the database and display the contents only if it's a packet
 				if ((type & 1) == 0 && strlen(msg.message))
@@ -1051,9 +1120,9 @@ int main(void)
 					push_message(&msg);
 
 					// prepare for display
-					strcpy(last_msg.src, msg.src);
-					strcpy(last_msg.dst, msg.dst);
-					strcpy(last_msg.text, msg.message);
+					snprintf(last_msg.src, sizeof(last_msg.src), "%s", msg.src);
+					snprintf(last_msg.dst, sizeof(last_msg.dst), "%s", msg.dst);
+					snprintf(last_msg.text, sizeof(last_msg.text), "%s", msg.message);
 
 					// clear the struct for a new message
 					memset((uint8_t *)&msg, 0, sizeof(message_t));
@@ -1072,8 +1141,8 @@ int main(void)
 				else if (type & 1)
 				{
 					// extract data
-					strcpy(last_str.src, msg.src);
-					strcpy(last_str.dst, msg.dst);
+					snprintf(last_str.src, sizeof(last_str.src), "%s", msg.src);
+					snprintf(last_str.dst, sizeof(last_str.dst), "%s", msg.dst);
 					memcpy(&last_str.type, &type, sizeof(type));
 					memcpy(last_str.meta, &msg.meta, sizeof(msg.meta));
 					redraw_req = 1;
@@ -1424,10 +1493,22 @@ int main(void)
 	linht_ctrl_pa_enable_set(false); // Disable PA
 	linht_ctrl_tx_rx_switch_set(false); // RX
 	
-	kill(fg_pid, SIGTERM); // kill FG
-	waitpid(fg_pid, NULL, 0);
+	if (fg_pid > 0)
+	{
+		kill(fg_pid, SIGTERM); // kill FG
+		waitpid(fg_pid, NULL, 0);
+	}
+
+	// zmq_ctx_destroy() waits for every open socket, and for unsent
+	// messages unless the linger time is 0
+	int linger = 0;
+	zmq_setsockopt(zmq_ptt_pub, ZMQ_LINGER, &linger, sizeof(linger));
+	zmq_setsockopt(zmq_fg_pub, ZMQ_LINGER, &linger, sizeof(linger));
+	zmq_setsockopt(zmq_sub, ZMQ_LINGER, &linger, sizeof(linger));
 	zmq_unbind(zmq_ptt_pub, ptt_ipc);
 	zmq_close(zmq_ptt_pub);
+	zmq_close(zmq_fg_pub);
+	zmq_close(zmq_sub);
 	zmq_ctx_destroy(zmq_ctx);
 	cyaml_free(&cfg, &config_schema, conf, 0);
 	db_cleanup();
