@@ -161,11 +161,8 @@ Gain is mapped to SX1255 HW blocks:
 The DAC and mixer gains belong to the TX path and are not exposed while the
 driver is RX only.
 
-You can manually set gain:
-
-```bash
-SoapySDRUtil --set="LNA=30"
-```
+Set the gains from the application, e.g. the gain controls in SDR++ or
+OpenWebRX, or `-g` in rtl_433. SoapySDRUtil has no option to set them.
 
 ## How It Works Internally
 
