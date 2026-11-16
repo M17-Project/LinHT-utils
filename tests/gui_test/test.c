@@ -10,6 +10,9 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
+#include <sys/file.h>
+#include <linux/i2c.h>
+#include <linux/i2c-dev.h>
 #include <linux/fb.h>
 #include <time.h>
 #include <m17.h>
@@ -151,9 +154,16 @@ typedef struct
 } m17_str_t;
 m17_str_t last_str;
 
+// battery voltage, read from the BQ25792 charger (Rev C has no battery
+// divider on the SoM ADC)
+const char chg_i2c_path[] = "/dev/i2c-2";
+#define BQ25792_ADDR		0x6b
+#define BQ25792_REG_ADC_CTRL	0x2E
+#define BQ25792_REG_VBAT_ADC	0x3B
+#define BQ25792_REG_PART_INFO	0x48
+int chg_fd = -1;
+
 // files
-const char batt_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage1_raw";
-int batt_fd;
 const char knob_volt[] = "/sys/bus/iio/devices/iio:device0/in_voltage0_raw";
 int knob_fd;
 uint8_t knob_pos;
@@ -431,6 +441,73 @@ void displayMessage(const char *src, const char *dst, const char *msg)
 
 	DrawTextEx(customFont, src_line, (Vector2){2.0f, 20.0f}, 14.0f, 0, ORANGE);
 	DrawTextBoxed(customFont, msg, (Rectangle){2, 40, RES_X - 1 - 2, RES_Y - 1 - 2}, 14.0f, 0, true, WHITE);
+}
+
+// one BQ25792 register access: write 'reg', then read 'len' bytes into 'rx'
+// (repeated start), or write 'val' to 'reg' when rx is NULL
+static int bq_xfer(uint8_t reg, uint8_t *rx, uint16_t len, uint8_t val)
+{
+	uint8_t tx[2] = {reg, val};
+	struct i2c_msg msgs[2] = {
+		{.addr = BQ25792_ADDR, .flags = 0, .len = (uint16_t)(rx ? 1 : 2), .buf = tx},
+		{.addr = BQ25792_ADDR, .flags = I2C_M_RD, .len = len, .buf = rx},
+	};
+	struct i2c_rdwr_ioctl_data xfer = {.msgs = msgs, .nmsgs = rx ? 2 : 1};
+
+	return (ioctl(chg_fd, I2C_RDWR, &xfer) == (int)xfer.nmsgs) ? 0 : -1;
+}
+
+// open the charger and check that it really is a BQ25792
+static int batt_init(void)
+{
+	uint8_t part;
+
+	chg_fd = open(chg_i2c_path, O_RDWR | O_CLOEXEC);
+	if (chg_fd < 0)
+		return -1;
+
+	if (bq_xfer(BQ25792_REG_PART_INFO, &part, 1, 0) != 0 || ((part >> 3) & 7) != 1)
+	{
+		close(chg_fd);
+		chg_fd = -1;
+		return -1;
+	}
+
+	return 0;
+}
+
+// Battery voltage in mV, -1 on error, -2 when no new value is available
+// (bus locked by another tool, or the ADC was just enabled).
+// The ADC runs continuously once enabled. It is checked on every read, as
+// another tool or a charger reset may have turned it off.
+// The flock() on the bus device is shared with bq25792_status.py.
+static int batt_read_mv(void)
+{
+	uint8_t ctrl, v[2];
+	int ret = -1;
+
+	if (chg_fd < 0)
+		return -1;
+
+	if (flock(chg_fd, LOCK_EX | LOCK_NB) != 0)
+		return -2;
+
+	if (bq_xfer(BQ25792_REG_ADC_CTRL, &ctrl, 1, 0) == 0)
+	{
+		if (!(ctrl & 0x80) || (ctrl & 0x40)) // off, or set to one-shot
+		{
+			// ADC_EN, continuous, 15-bit, no averaging, keep the reserved bits
+			bq_xfer(BQ25792_REG_ADC_CTRL, NULL, 0, (uint8_t)((ctrl & 0x03) | 0x80));
+			ret = -2;
+		}
+		else if (bq_xfer(BQ25792_REG_VBAT_ADC, v, 2, 0) == 0)
+		{
+			ret = ((int)v[0] << 8) | v[1]; // 1 mV per LSB
+		}
+	}
+
+	flock(chg_fd, LOCK_UN);
+	return ret;
 }
 
 static inline uint16_t rd_u16(const uint8_t *p)
@@ -896,12 +973,8 @@ int main(void)
 	linht_ctrl_red_led_set(false);
 
 	// battery voltage
-	batt_fd = open(batt_volt, O_RDONLY | O_CLOEXEC);
-	if (batt_fd < 0)
-	{
-		fprintf(stderr, "Unable to perform battery voltage readout.\nExiting.\n");
-		return -1;
-	}
+	if (batt_init() != 0)
+		fprintf(stderr, "Can not access the BQ25792 charger on %s, no battery voltage readout.\n", chg_i2c_path);
 
 	// volume knob position
 	knob_fd = open(knob_volt, O_RDONLY | O_CLOEXEC);
@@ -1307,29 +1380,25 @@ int main(void)
 		// occasional checks - current time and battery voltage
 		if (cnt % 200 == 0)
 		{
-			// battery voltage display
-			lseek(batt_fd, 0, SEEK_SET);
-			n = read(batt_fd, buf, sizeof(buf) - 1);
-			uint16_t batt_mv = 0;
+			// battery voltage display (-2: no new value, keep the last one)
+			int batt_mv = batt_read_mv();
 
-			if (n > 0)
+			if (batt_mv >= 0)
 			{
-				buf[n] = 0;
-				int value = atoi(buf);
-				batt_mv = (uint16_t)((float)value / 4096.0f * 1.8f * (39.0f + 10.0f) / 10.0f * 1000.0f);
 				snprintf(bv, sizeof(bv), "%d.%dV", batt_mv / 1000, (batt_mv % 1000) / 100);
+
+				if (batt_mv >= 7400)
+					bv_col = GREEN;
+				else if (batt_mv >= 7000)
+					bv_col = ORANGE;
+				else
+					bv_col = RED;
 			}
-			else
+			else if (batt_mv == -1)
 			{
 				snprintf(bv, sizeof(bv), "?.?V");
-			}
-
-			if (batt_mv >= 7400)
-				bv_col = GREEN;
-			else if (batt_mv >= 7000)
-				bv_col = ORANGE;
-			else
 				bv_col = RED;
+			}
 
 			if (strcmp(bv, bv_last))
 			{
@@ -1487,6 +1556,8 @@ int main(void)
 	UnloadFont(customFont38);
 	UnloadFont(customFont14);
 	kbd_cleanup(kbd);
+	if (chg_fd >= 0)
+		close(chg_fd);
 	sx1255_cleanup();
 
 	linht_ctrl_atten_cleanup(); // Cleanup attenuator control

@@ -6,8 +6,9 @@ Defaults: /dev/i2c-2, address 0x6b. --no-adc reads status without ANY writes.
 
 Normal mode temporarily changes only REG2E to request a 15-bit one-shot ADC
 conversion, then restores it (also on Ctrl-C/errors). Charging limits are never
-changed. Disabled ADC channels and an already running ADC are left untouched:
-stop its owner or use --no-adc. Do not run alongside another charger controller.
+changed. An ADC already running continuously (gui_test enables it for the
+battery display) is read without any writes. Disabled ADC channels and a
+running one-shot conversion are left untouched: stop its owner or use --no-adc. Do not run alongside another charger controller.
 The advisory bus lock coordinates copies of this tool, not kernel drivers or
 other I2C utilities. SIGKILL/power loss cannot execute cleanup.
 
@@ -44,7 +45,16 @@ class I2C:
         self.fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR | os.O_CLOEXEC)
         self.address = address
         try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # gui_test holds this lock for a single read, so wait up to 1 s
+            deadline = time.monotonic() + 1.0
+            while True:
+                try:
+                    fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.02)
             # I2C_SLAVE checks for a bound kernel driver. Never use FORCE.
             fcntl.ioctl(self.fd, 0x0703, address)
         except BaseException:
@@ -95,8 +105,11 @@ def word(data, offset, signed=False):
 
 def measure(bus):
     original = bus.read(0x2e)[0]
+    if original & 0x80 and not original & 0x40:
+        # continuous conversion already running (e.g. gui_test), just read it
+        return bus.read(0x31, 22)
     if original & 0x80:
-        raise RuntimeError("ADC already active; stop its owner or use --no-adc")
+        raise RuntimeError("ADC one-shot conversion in progress, stop its owner or use --no-adc")
     if any(bus.read(0x2f, 2)):
         raise RuntimeError("Some ADC channels are disabled; use --no-adc (configuration preserved)")
     try:
