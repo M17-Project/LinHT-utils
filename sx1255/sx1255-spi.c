@@ -28,9 +28,13 @@ sx1255_rate_t rate;
 uint8_t addr;
 uint8_t val;
 
-// SX1255 RF range (datasheet), the frequency register overflows above 512 MHz
-#define FREQ_MIN 400000000L
-#define FREQ_MAX 510000000L
+// The 24-bit frequency register with the 32 MHz reference holds up to
+// (2^24 - 1) * 32 MHz / 2^20 = 511999969 Hz. Higher values would wrap.
+#define FREQ_REG_MAX 511999969L
+// Datasheet range. Outside it the PLLs may still lock (356 MHz was
+// measured), so only warn. A failed lock is reported anyway.
+#define FREQ_DS_MIN 400000000L
+#define FREQ_DS_MAX 510000000L
 
 // Parse a whole string as an integer, false on garbage or overflow
 static bool parse_long(const char *s, int base, long *out)
@@ -196,14 +200,17 @@ int main(int argc, char *argv[])
         case 'r':
             {
                 long f;
-                if (!parse_long(optarg, 10, &f) || f < FREQ_MIN || f > FREQ_MAX)
+                if (!parse_long(optarg, 10, &f) || f <= 0 || f > FREQ_REG_MAX)
                 {
-                    printf("Invalid RX frequency '%s'. Allowed %ld..%ld Hz, not changed.\n",
-                           optarg, FREQ_MIN, FREQ_MAX);
+                    printf("Invalid RX frequency '%s'. Allowed up to %ld Hz, not changed.\n",
+                           optarg, FREQ_REG_MAX);
                     break;
                 }
                 rxf = (uint32_t)f;
                 printf("Setting RX frequency to %u Hz\n", rxf);
+                if (f < FREQ_DS_MIN || f > FREQ_DS_MAX)
+                    printf("Warning: outside the SX1255 datasheet range (%ld..%ld Hz)\n",
+                           FREQ_DS_MIN, FREQ_DS_MAX);
                 if (sx1255_set_rx_freq(rxf) != 0)
                     printf("RX frequency write failed or the PLL did not lock\n");
             }
@@ -213,14 +220,17 @@ int main(int argc, char *argv[])
         case 't':
             {
                 long f;
-                if (!parse_long(optarg, 10, &f) || f < FREQ_MIN || f > FREQ_MAX)
+                if (!parse_long(optarg, 10, &f) || f <= 0 || f > FREQ_REG_MAX)
                 {
-                    printf("Invalid TX frequency '%s'. Allowed %ld..%ld Hz, not changed.\n",
-                           optarg, FREQ_MIN, FREQ_MAX);
+                    printf("Invalid TX frequency '%s'. Allowed up to %ld Hz, not changed.\n",
+                           optarg, FREQ_REG_MAX);
                     break;
                 }
                 txf = (uint32_t)f;
                 printf("Setting TX frequency to %u Hz\n", txf);
+                if (f < FREQ_DS_MIN || f > FREQ_DS_MAX)
+                    printf("Warning: outside the SX1255 datasheet range (%ld..%ld Hz)\n",
+                           FREQ_DS_MIN, FREQ_DS_MAX);
                 if (sx1255_set_tx_freq(txf) != 0)
                     printf("TX frequency write failed or the PLL did not lock\n");
             }
