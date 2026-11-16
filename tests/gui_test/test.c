@@ -1186,7 +1186,7 @@ int main(void)
 				{
 					msg.timestamp = time(NULL);
 					sprintf(msg.protocol, "M17");
-					msg.read = 1;
+					msg.read = 0; // unread until a client marks it read
 
 					// dump to database
 					fprintf(stderr, "Message from %s: %s\n", msg.src, msg.message);
@@ -1223,11 +1223,14 @@ int main(void)
 			}
 		}
 
-		// check keypad events
+		// check keypad events, all pending ones, not just one per frame
 		struct input_event ev;
-		ssize_t n = read(kbd, &ev, sizeof(ev)); // non-blocking
-		if (n == (ssize_t)sizeof(ev) && ev.type == EV_KEY)
+		ssize_t n;
+		while (read(kbd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) // non-blocking
 		{
+			if (ev.type != EV_KEY)
+				continue;
+
 			if (ev.value == KEY_PRESS)
 			{
 				if (ev.code == KEY_P)
@@ -1308,7 +1311,7 @@ int main(void)
 					return 0;
 				}
 			}
-			else // KEY_RELEASE
+			else if (ev.value == KEY_RELEASE) // autorepeat (2) is ignored
 			{
 				if (ev.code == KEY_P)
 				{
