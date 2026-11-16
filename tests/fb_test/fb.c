@@ -32,6 +32,7 @@ int rval;
 int fb;				   // framebuffer file handle
 size_t ssize;		   // screen size
 uint32_t *framebuffer; // framebuffer
+size_t fb_stride;	   // pixels per framebuffer line (line_length / 4)
 
 // keyboard
 const char *kbd_path = "/dev/input/event0";
@@ -93,6 +94,15 @@ int fb_init(uint32_t **buffer, size_t *ssize, int *fhandle)
 		return 1;
 	}
 
+	// the drawing code writes 32-bit pixels
+	if (vinfo.bits_per_pixel != 32 || vinfo.xres < RES_X || vinfo.yres < RES_Y)
+	{
+		fprintf(stderr, "Unsupported framebuffer: %ux%u, %u bpp (need %dx%d, 32 bpp)\n",
+				vinfo.xres, vinfo.yres, vinfo.bits_per_pixel, RES_X, RES_Y);
+		return 1;
+	}
+
+	fb_stride = finfo.line_length / 4;
 	*ssize = finfo.line_length * vinfo.yres;
 	*buffer = (uint32_t *)mmap(0, *ssize, PROT_READ | PROT_WRITE, MAP_SHARED, *fhandle, 0);
 	if (*buffer == MAP_FAILED)
@@ -130,7 +140,7 @@ void kbd_cleanup(int fhandle)
 static inline void put_pixel(uint32_t *fb, int x, int y, uint32_t color)
 {
 	if (x >= 0 && x < RES_X && y >= 0 && y < RES_Y)
-		fb[y * RES_X + x] = color;
+		fb[y * fb_stride + x] = color;
 }
 
 void draw_line(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t color)
@@ -226,7 +236,7 @@ int main(void)
 	predict_observer_t *observer = predict_create_observer("OpenRTX", DEG2RAD(lat), DEG2RAD(lon), 75);
 
 	float az_el[2][601] = {{0, 0}};
-	for (int t = -5 * 60; t < 5 * 60; t++)
+	for (int t = -5 * 60; t <= 5 * 60; t++) // 601 entries, -300..+300 s
 	{
 		predict_julian_date_t curr_time = predict_to_julian(1756948800 + t);
 
