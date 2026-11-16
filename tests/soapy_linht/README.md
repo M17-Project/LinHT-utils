@@ -77,7 +77,7 @@ sudo apt install cmake g++ libsoapysdr-dev libzmq3-dev
 
 ```bash
 git clone https://github.com/M17-Project/LinHT-utils.git
-cd LinHT-utils/soapy_linht
+cd LinHT-utils/tests/soapy_linht
 mkdir build && cd build
 cmake ..
 make -j
