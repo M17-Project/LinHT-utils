@@ -252,7 +252,12 @@ static void partial_learning(void)
     partial_setup();
     CHECK(isnan(tel_capacity_partial_wh(&t)));
     CHECK(!strcmp(tel_capacity_source(&t), "none"));
-    partial_cycle(cap, 50, 70, I_HIZ, 0.01 * urand(), 0.01 * urand(), 1.0);
+    // Drawn in two statements, because C leaves the order of the arguments
+    // of one call open (x86 gcc took the second first, aarch64 the first).
+    // This order keeps the values the checks were tuned with.
+    double e2 = 0.01 * urand();
+    double e1 = 0.01 * urand();
+    partial_cycle(cap, 50, 70, I_HIZ, e1, e2, 1.0);
     CHECK(t.part_n == 1);
     CHECK(t.learned_partial || t.part_n == 1);
     // The first cycle moves part of the way from the rated value.
@@ -261,8 +266,11 @@ static void partial_learning(void)
     CHECK(14.8 - first < 0.6 * (14.8 - cap));
     CHECK_NEAR(t.part_est, cap, 0.1 * cap);
     CHECK(t.part_depth > 15 && t.part_depth < 20);  // the settle time is not counted
-    for (int c = 1; c < 10; c++)
-        partial_cycle(cap, 50, 70, I_HIZ, 0.01 * urand(), 0.01 * urand(), 1.0);
+    for (int c = 1; c < 10; c++) {
+        double f2 = 0.01 * urand();
+        double f1 = 0.01 * urand();
+        partial_cycle(cap, 50, 70, I_HIZ, f1, f2, 1.0);
+    }
     CHECK(t.part_n == 10);
     CHECK_NEAR(t.part_wh, cap, 0.1 * cap);
     CHECK(!tel_capacity_reliable(&t) && t.cap_wh == 14.8);   // never full: no full learning
