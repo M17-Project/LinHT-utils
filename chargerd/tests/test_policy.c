@@ -107,13 +107,13 @@ static void low_battery(void)
     setup();
     in.soc_trusted = 0;
     in.soc = 50;
-    in.vbat = 7.25;                             // below quiet_min_vbat 7.3
+    in.vbat = 7.40;                             // below quiet_min_vbat 7.45
     step(1);
     CHECK(policy_quiet(&p, ":1.31", 60, 1, &g) == PERR_LOW_BATTERY);
-    in.vbat = 7.4;
+    in.vbat = 7.55;
     step(2);
     CHECK(policy_quiet(&p, ":1.31", 60, 2, &g) == PERR_OK);
-    in.vbat = 7.05;                             // below quiet_end_vbat 7.1
+    in.vbat = 7.30;                             // below quiet_end_vbat 7.35
     in.soc = 3;                                 // the voltage table agrees
     step(3);
     CHECK(p.nlease == 0 && p.low_block);

@@ -22,8 +22,8 @@ void config_defaults(struct chargerd_config *c)
     c->quiet_min_soc = 25.0;
     c->quiet_end_soc = 20.0;
     c->quiet_resume_soc = 40.0;
-    c->quiet_min_vbat = 7.3;
-    c->quiet_end_vbat = 7.1;
+    c->quiet_min_vbat = 7.45;
+    c->quiet_end_vbat = 7.35;
     c->low_soc = 15.0;
     c->critical_soc = 5.0;
     snprintf(c->battery, sizeof(c->battery), "Retevis C62 2S Li-ion");

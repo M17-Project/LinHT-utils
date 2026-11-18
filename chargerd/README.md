@@ -54,7 +54,7 @@ file or key keeps the default.
 | `quiet_min_soc` | 25 | % on USB, new leases are refused below |
 | `quiet_end_soc` | 20 | % on USB, all leases end and charging resumes |
 | `quiet_resume_soc` | 40 | % leases are allowed again after a low battery end |
-| `quiet_min_vbat`, `quiet_end_vbat` | 7.3, 7.1 | V, used instead while the SoC is not anchored at full |
+| `quiet_min_vbat`, `quiet_end_vbat` | 7.45, 7.35 | V, used instead while the SoC is not anchored at full (7.35 V is about 20 % on the voltage table) |
 | `low_soc`, `critical_soc` | 15, 5 | % for the `LowBattery` signal on battery |
 | `battery`, `cells` | Retevis C62, 2 | pack description, series cells |
 | `capacity_rated_wh`, `capacity_rated_mah` | 14.8, 2000 | from the pack label |
