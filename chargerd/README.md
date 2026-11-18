@@ -10,7 +10,8 @@ What it does:
 - offers the readings, averages and battery estimates on the system D-Bus,
 - gives quiet leases. A lease puts the charger in HIZ, the only state in
   which the charger does not raise the receiver noise floor,
-- learns the battery capacity and the state of health from discharges.
+- learns the battery capacity and the state of health from discharges,
+  from full ones (reliable) and from partial ones (low precision).
 
 It does not handle the i.MX93 SoC ADC (`iio:device0`, its calibration failure
 on Rev C and the volume knob). The battery voltage comes only from the
@@ -109,6 +110,7 @@ All are read only. The ones in the first table send `PropertiesChanged`.
 | `Pfm` | b | PFM in forward mode enabled |
 | `Faults` | as | fault names from REG20, REG21 and the recent fault flags |
 | `CapacityReliable` | b | one learning discharge of 70 % or two of 50 % |
+| `StateOfHealthSource` | s | capacity behind the SoH and the energy estimates: `full` (reliable, from full anchored discharges), `partial` (no reliable value yet, partial cycle estimate, low precision), `none` (neither, `CapacityLearnedWh` as it is) |
 
 Measurements, poll them with `GetAll` every 1 to 5 s:
 
@@ -128,8 +130,11 @@ Measurements, poll them with `GetAll` every 1 to 5 s:
 | `RunTimeRemainingSec` | x | down to `critical_soc`, -1 when not on battery |
 | `TimeToFullSec` | x | -1 when not charging, optimistic in CV |
 | `OnBatterySec`, `ChargingSec` | t | since the battery started to supply the unit, or since the charge started |
-| `CapacityRatedWh`, `CapacityLearnedWh` | Wh | from the config, learned |
-| `StateOfHealthPercent` | % | learned / rated |
+| `CapacityRatedWh`, `CapacityLearnedWh` | Wh | from the config, learned from full anchored discharges |
+| `CapacityPartialWh` | Wh | low precision estimate from partial cycles, NaN before the first one |
+| `CapacityPartialSamples` | u | partial cycles used |
+| `CapacityPartialWeight` | | sum of their decayed weights, about 1 per 20 % deep cycle at light load. Below 2 the estimate is rough |
+| `StateOfHealthPercent` | % | capacity in use / rated, see `StateOfHealthSource` |
 | `EquivalentCycles` | | all discharged energy / rated capacity |
 
 ### Signals
@@ -243,7 +248,7 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
 
 - Energy counter: E += VBAT times IBAT times dt, every second.
 - Full anchor: the `full` rule sets the SoC to 100 % and the counter to 0.
-- SoC = 100 times (1 + E / C), with C the learned capacity. Without an
+- SoC = 100 times (1 + E / C), with C the capacity in use (below). Without an
   anchor the SoC comes from a generic 2S NMC voltage table, 10 to 20 % off
   under load. After a restart the saved counter is used again when the
   voltage agrees within 15 %.
@@ -251,10 +256,36 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
   ends at a voltage SoC of 50 % or less gives C_est = E_out / (1 - SoC_v / 100).
   C moves towards C_est with the weight 0.5 times the depth, clamped to 50
   to 110 % of rated.
+- Partial cycles: the FART auto mode keeps the battery between about 50 and
+  70 % (quiet while the SoC is at least 50 %, charge back to 70 %), so it
+  never reaches a full anchor. In quiet (HIZ) the load is small and steady
+  (about 0.16 A), so VBAT is close to the open circuit voltage and the
+  voltage table gives the SoC at both ends of the discharge. Every
+  discharge segment is evaluated: the first 10 min are skipped (VBAT
+  relaxes after the charge), then the energy is counted until a charge
+  current above 0.05 A ends the segment. A short gap without charge
+  current, for example between two leases, does not end it. A segment of
+  at least 15 % by the table at a mean load up to 0.6 A gives
+  C_est = E_out / (SoC_v start - SoC_v end), dropped outside 40 to 160 %
+  of rated. Its weight is (depth / 20 %) squared, at most 9, divided by
+  1 + (I_mean / 0.25 A) squared: about 0.6 for a 20 % segment in quiet.
+  The estimate starts at `CapacityLearnedWh` with the weight 1, every new
+  segment first multiplies the old weights by 0.9, then the estimate moves
+  towards C_est by its share of the weight. So one segment changes a
+  settled estimate by about a tenth of its error at most, and old segments
+  fade out as the battery ages. Clamped to 50 to 110 % of rated.
+- Capacity in use (`StateOfHealthSource`): the learned one when it is
+  reliable, else the partial estimate when there is one, else the learned
+  one as it is. The SoC counter, `EnergyRemainingWh`, the run times and
+  `StateOfHealthPercent` use it. The partial estimate rests on a generic
+  table, so a table that does not fit the cells shifts it by a few %.
+  Each partial segment is logged as "partial cycle" in the journal.
 - Run time = (SoC - `critical_soc`) times C / the 10 min power average (the
   1 min average until 10 min are filled).
 
-`state.json` holds the learned capacity, the counter and the anchor. It is
+`state.json` holds the learned capacity, the partial estimate with its
+weight and count, the counter and the anchor. A partial segment in progress
+is not saved, a restart starts a new one. It is
 written atomically every 15 min, on a full anchor, at the end of a cycle and
 at a clean stop. `cycles.jsonl` gets one line per discharge or charge of at
 least 10 %: times, VBAT and SoC at start and end, energy, charge, mean power,
@@ -275,6 +306,11 @@ These need hours and are not part of `make test`:
   The battery drains as on battery until `quiet_end_soc` ends the lease,
   then the charge starts and the discharge (about 80 % deep) is evaluated at
   once.
+- Partial cycles: run the FART auto mode on USB for a day (several 50 to
+  70 % cycles). Every return to charging logs "partial cycle" with the
+  depth, C_est and the weight. Compare `CapacityPartialWh` with a full
+  anchored learning of the same battery. A steady offset means the voltage
+  table does not fit the cells in the 50 to 70 % range.
 - Counter accuracy: a lab supply in place of the battery with its own current
   reading, 30 min on battery, compare `EnergyRemainingWh` steps with the
   supply.

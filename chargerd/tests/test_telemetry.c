@@ -184,10 +184,150 @@ static void restore(void)
     CHECK(t.soc > 90);
 }
 
+// --- Partial cycles: a synthetic battery between 50 and 70 % ---
+
+#define R_PACK 0.15             // ohm
+#define I_HIZ  0.16             // A, load in quiet (HIZ)
+
+static double bsoc;             // true SoC of the synthetic battery
+static unsigned rng = 12345;
+
+static double urand(void)       // -1 .. 1, the same sequence every run
+{
+    rng = rng * 1103515245u + 12345u;
+    return ((rng >> 8) & 0xffff) / 32767.5 - 1.0;
+}
+
+// One second with the given battery current. VBAT is the table voltage of
+// the true SoC plus the table error, the IR drop, a relaxation term and
+// 5 mV ADC noise. gain scales the reported current (a counting error).
+static void bstep(double cap, double i, double verr, double relax, double gain)
+{
+    double v = tel_voltage_from_soc(&t, bsoc) + verr + i * R_PACK + relax + 0.005 * urand();
+    bsoc += v * i / 3600.0 / cap * 100.0;
+    in.now = now;
+    in.wall = 1.7e9 + now;
+    in.vbat = v;
+    in.ibat = i * gain;
+    tel_sample(&t, &in);
+    in.full_event = 0;
+    now += 1;
+}
+
+// Charge at 1 A to hi, then quiet (HIZ) at load amps down to lo. The table
+// error moves linearly from e_hi at hi to e_lo at lo (V per pack).
+static void partial_cycle(double cap, double lo, double hi, double load, double e_hi, double e_lo,
+                          double gain)
+{
+    in.discharging = 0;
+    in.charging = 1;
+    while (bsoc < hi)
+        bstep(cap, 1.0, e_hi, 0.05, gain);
+    in.charging = 0;
+    in.discharging = 1;
+    for (int k = 0; bsoc > lo; k++)
+    {
+        double err = e_hi + (e_lo - e_hi) * (hi - bsoc) / (hi - lo);
+        bstep(cap, -load, err, 0.06 * exp(-k / 120.0), gain);
+    }
+    // Charging resumes: the segment ends.
+    in.discharging = 0;
+    in.charging = 1;
+    bstep(cap, 1.0, e_lo, 0.05, gain);
+}
+
+static void partial_setup(void)
+{
+    setup();
+    bsoc = 60;
+    rng = 12345;
+}
+
+static void partial_learning(void)
+{
+    const double cap = 12.0;    // 81 % of rated
+
+    // Ten cycles 70 -> 50 % with a table error of up to 10 mV per pack at
+    // each end (0.7 % SoC): within 10 % of the true capacity.
+    partial_setup();
+    CHECK(isnan(tel_capacity_partial_wh(&t)));
+    CHECK(!strcmp(tel_capacity_source(&t), "none"));
+    partial_cycle(cap, 50, 70, I_HIZ, 0.01 * urand(), 0.01 * urand(), 1.0);
+    CHECK(t.part_n == 1);
+    CHECK(t.learned_partial || t.part_n == 1);
+    // The first cycle moves part of the way from the rated value.
+    double first = t.part_wh;
+    CHECK(first < 14.8 && first > cap);
+    CHECK(14.8 - first < 0.6 * (14.8 - cap));
+    CHECK_NEAR(t.part_est, cap, 0.1 * cap);
+    CHECK(t.part_depth > 15 && t.part_depth < 20);  // the settle time is not counted
+    for (int c = 1; c < 10; c++)
+        partial_cycle(cap, 50, 70, I_HIZ, 0.01 * urand(), 0.01 * urand(), 1.0);
+    CHECK(t.part_n == 10);
+    CHECK_NEAR(t.part_wh, cap, 0.1 * cap);
+    CHECK(!tel_capacity_reliable(&t) && t.cap_wh == 14.8);   // never full: no full learning
+    CHECK(!strcmp(tel_capacity_source(&t), "partial"));
+    CHECK_NEAR(tel_capacity_wh(&t), t.part_wh, 1e-12);
+    CHECK_NEAR(tel_soh(&t), 100 * t.part_wh / 14.8, 1e-9);
+
+    // One bad cycle (the current reads 40 % high) moves it by a bounded step.
+    double before = t.part_wh;
+    partial_cycle(cap, 50, 70, I_HIZ, 0, 0, 1.4);
+    CHECK(t.part_n == 11);
+    CHECK(t.part_est > 1.3 * cap);
+    CHECK(fabs(t.part_wh - before) < 0.06 * cap);
+
+    // A shallow segment (10 %) and a heavy load are not used.
+    int n = t.part_n;
+    partial_cycle(cap, 58, 70, I_HIZ, 0, 0, 1.0);
+    CHECK(t.part_n == n);
+    partial_cycle(cap, 40, 70, 1.0, 0, 0, 1.0);
+    CHECK(t.part_n == n);
+
+    // A short gap between two leases (USB, no charge current) does not end
+    // the segment.
+    partial_setup();
+    in.charging = 1;
+    while (bsoc < 70)
+        bstep(cap, 1.0, 0, 0.05, 1.0);
+    in.charging = 0;
+    in.discharging = 1;
+    for (int k = 0; k < 3600; k++)
+        bstep(cap, -I_HIZ, 0, 0, 1.0);
+    in.discharging = 0;
+    in.charging = 1;
+    bstep(cap, 0.0, 0, 0, 1.0);
+    bstep(cap, 0.0, 0, 0, 1.0);
+    CHECK(t.part_state == 2);
+    partial_cycle(cap, 50, bsoc, I_HIZ, 0, 0, 1.0);
+    CHECK(t.part_n == 1 && t.part_depth > 15);
+    CHECK_NEAR(t.part_est, cap, 0.05 * cap);
+
+    // Saved and restored with the state file.
+    struct tel_saved sv;
+    tel_save(&t, &sv);
+    double pw = t.part_wh;
+    tel_init(&t, &cfg);
+    tel_restore(&t, &sv, 7.6);
+    CHECK(t.part_n == 1 && t.part_wh == pw && t.part_w == sv.part_w);
+
+    // A reliable full-anchored value wins, the partial one stays next to it.
+    partial_setup();
+    for (int c = 0; c < 3; c++)
+        partial_cycle(cap, 50, 70, I_HIZ, 0, 0, 1.0);
+    CHECK(!strcmp(tel_capacity_source(&t), "partial"));
+    discharge(36000, 8.3, 7.4, -1.2);           // the learning() case, 15.25 Wh
+    CHECK(tel_capacity_reliable(&t));
+    CHECK(!strcmp(tel_capacity_source(&t), "full"));
+    CHECK_NEAR(tel_soh(&t), 100 * 15.25 / 14.8, 0.4);
+    CHECK(t.part_n >= 3 && !isnan(tel_capacity_partial_wh(&t)));
+}
+
 void test_telemetry(void)
 {
     averages();
     counter_and_soc();
     learning();
     restore();
+    partial_learning();
 }

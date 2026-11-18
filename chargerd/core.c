@@ -286,6 +286,10 @@ void core_poll(struct core *c, double now, double wall)
             core_log(6, "battery full, SoC anchor at 100 %%");
         if (c->tel.learned)
             core_log(6, "capacity learned: %.2f Wh (%.0f %% of rated)", c->tel.cap_wh, tel_soh(&c->tel));
+        if (c->tel.learned_partial)
+            core_log(6, "partial cycle: %.1f %% deep, %.2f Wh, weight %.2f, partial capacity %.2f Wh "
+                     "from %d cycles (low precision)", c->tel.part_depth, c->tel.part_est,
+                     c->tel.part_weight, c->tel.part_wh, c->tel.part_n);
         if (c->tel.cycle_ready)
         {
             rc = store_append_cycle(c->cfg.state_dir, &c->tel.cycle);
