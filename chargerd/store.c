@@ -63,6 +63,9 @@ int store_save(const char *dir, const struct tel_saved *s)
     num(f, "learn_energy_wh", s->learn_e, 0);
     num(f, "learn_time_s", s->learn_t, 0);
     num(f, "learn_soc_voltage", s->learn_socv, 0);
+    num(f, "capacity_partial_wh", s->part_wh, 0);
+    num(f, "partial_weight", s->part_w, 0);
+    fprintf(f, "  \"partial_samples\": %d,\n", s->part_n);
     fprintf(f, "  \"clean_stop\": %d\n}\n", s->clean_stop);
     fclose(f);
 
@@ -114,6 +117,11 @@ int store_load(const char *dir, struct tel_saved *s)
     s->learn_t = get(text, "learn_time_s", 0);
     s->learn_socv = get(text, "learn_soc_voltage", NAN);
     s->clean_stop = (int)get(text, "clean_stop", 0);
+    s->part_wh = get(text, "capacity_partial_wh", NAN);
+    s->part_w = get(text, "partial_weight", 0);
+    s->part_n = (int)get(text, "partial_samples", 0);
+    if (isnan(s->part_wh) || isnan(s->part_w))
+        s->part_n = 0;
     if (isnan(s->cap_wh) || isnan(s->e_wh) || isnan(s->out_total_wh))
         return -EINVAL;
     return 0;

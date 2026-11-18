@@ -49,6 +49,8 @@ struct tel_saved
     int learn_active;
     double learn_e, learn_t, learn_socv;
     int clean_stop;
+    double part_wh, part_w;     // partial cycle estimate and its weight
+    int part_n;                 // partial cycles used
 };
 
 struct telemetry
@@ -74,6 +76,14 @@ struct telemetry
     int learn_active;
     double learn_e, learn_t, learn_socv;
 
+    // Partial cycle learning, low precision (see tel_capacity_wh).
+    double part_wh, part_w;     // estimate, sum of the decayed weights
+    int part_n;                 // discharge segments used
+    int part_state;             // PART_IDLE, PART_SETTLE, PART_COUNT
+    double part_t, part_e, part_q;      // s, Wh out, Ah out since counting
+    double part_socv0, part_socv;       // voltage SoC at start and last
+    double part_est, part_weight, part_depth;   // last segment used
+
     int seg_kind;
     struct tel_cycle seg;
     double seg_t0, seg_e;
@@ -84,6 +94,7 @@ struct telemetry
     int cycle_ready;
     struct tel_cycle cycle;
     int learned;                // capacity updated
+    int learned_partial;        // partial estimate updated
     int changed;                // something worth saving
 };
 
@@ -95,10 +106,19 @@ double tel_avg_power(const struct telemetry *t, unsigned window);
 double tel_avg_current(const struct telemetry *t, unsigned window);
 
 double tel_soc_from_voltage(const struct telemetry *t, double vbat);
+// Inverse of the table: pack open circuit voltage at a SoC.
+double tel_voltage_from_soc(const struct telemetry *t, double soc);
 double tel_energy_remaining(const struct telemetry *t);
 double tel_soh(const struct telemetry *t);
 double tel_equivalent_cycles(const struct telemetry *t);
 int tel_capacity_reliable(const struct telemetry *t);
+// The capacity the estimates use: the learned one when reliable, else the
+// partial cycle estimate when there is one, else the learned one as it is.
+double tel_capacity_wh(const struct telemetry *t);
+// Where tel_capacity_wh() comes from: "full", "partial" or "none".
+const char *tel_capacity_source(const struct telemetry *t);
+// NaN without a partial cycle.
+double tel_capacity_partial_wh(const struct telemetry *t);
 long long tel_runtime_s(const struct telemetry *t, int discharging);
 long long tel_time_to_full_s(const struct telemetry *t, int charging);
 unsigned long long tel_since(double since, double now);
