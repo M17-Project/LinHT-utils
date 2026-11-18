@@ -1,0 +1,22 @@
+[Unit]
+Description=LinHT charger daemon (BQ25792 on I2C bus 2)
+After=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.m17project.linht.Charger1
+ExecStart=/usr/bin/linht-chargerd
+# Runs after every exit, also after SIGKILL, a crash or the OOM killer.
+# EN_HIZ survives the charger watchdog, so this puts the charger back to
+# stock (HIZ off, charging on, PFM stock, ADC off).
+ExecStopPost=/usr/bin/linht-chargerd --restore
+Restart=always
+RestartSec=2
+StateDirectory=linht-chargerd
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
