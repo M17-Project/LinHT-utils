@@ -50,6 +50,7 @@ struct policy_in
     int chip_ok;            // 0 after 3 failed transfers in a row
     int usb;                // VBUS present and power good
     int fault;              // fault status or a recent fault flag
+    int ovp_full;           // the fault is only VBAT_OVP at the end of charge
     int chg_done;           // CHG_STAT = done
     double vbat, ibat;      // V, A (positive = charging)
     double vreg;            // V

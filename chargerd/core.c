@@ -98,6 +98,9 @@ int core_init(struct core *c, double now)
     c->adc_changed = -1e9;
     c->last_fix_log = c->last_wd_log = c->last_stale_log = -1e9;
     c->last_save = now;
+    c->recover_ref = now;
+    c->fresh_since = -1;
+    c->vbat_fresh = NAN;
 
     rc = store_load(c->cfg.state_dir, &c->saved);
     if (rc == 0)
@@ -116,6 +119,23 @@ int core_init(struct core *c, double now)
     return 0;
 }
 
+// The fault is only VBAT_OVP (status or recent flag), on USB, and the last
+// fresh VBAT was at the end of charge: from VREG minus CORE_OVP_FULL_V up to
+// 101 % of VREG, the lowest OVP release level of the data sheet. VREG must
+// be a sane value for the cells. The daemon never writes VREG.
+static int ovp_at_full(const struct core *c, double now)
+{
+    uint8_t f0 = c->m.fault0 & FAULT0_MASK, f1 = c->m.fault1 & FAULT1_MASK;
+    if (now < c->fault_until)
+    {
+        f0 |= c->fflag0_recent;
+        f1 |= c->fflag1_recent;
+    }
+    double vreg = c->m.vreg, v = c->vbat_fresh;
+    return f0 == BQ_VBAT_OVP && !f1 && c->m.vbus_present && !isnan(v) && vreg > 0 &&
+           vreg <= c->cfg.cells * 4.2 + 0.005 && v >= vreg - CORE_OVP_FULL_V && v <= vreg * 1.01;
+}
+
 static void fill_input(struct core *c, struct policy_in *in, double now, int chip_ok)
 {
     memset(in, 0, sizeof(*in));
@@ -123,6 +143,7 @@ static void fill_input(struct core *c, struct policy_in *in, double now, int chi
     in->chip_ok = chip_ok;
     in->usb = core_usb(c);
     in->fault = (c->m.fault0 & FAULT0_MASK) || (c->m.fault1 & FAULT1_MASK) || now < c->fault_until;
+    in->ovp_full = in->fault && ovp_at_full(c, now);
     in->chg_done = c->m.chg_stat == BQ_CHG_DONE;
     in->vbat = c->valid ? c->m.vbat : NAN;
     in->ibat = c->valid ? c->m.ibat : NAN;
@@ -160,7 +181,8 @@ void core_apply(struct core *c, double now)
     in.now = now;
     policy_step(&c->pol, &in);
     c->pending_full |= c->pol.full_event;
-    if (c->pol.state != ST_CHIP_ERROR && enforce(c, now) < 0)
+    // Between the two halves of a recovery the next poll writes.
+    if (c->pol.state != ST_CHIP_ERROR && !c->recover_phase && enforce(c, now) < 0)
         c->fails++;
 }
 
@@ -187,6 +209,67 @@ static void low_battery(struct core *c)
     if (level > c->low_level)
         c->lowbat_event = level;
     c->low_level = level;
+}
+
+// Stopped ADC. Seen on Rev C at the end of a charge: VBAT_OVP, then every
+// ADC result stays the same while REG2E still says continuous conversion.
+// ADC_EN off and on did not help, a daemon restart did. So the recovery is
+// what a restart writes: first the stock values of bq_restore() except
+// REG0F, then one poll later the start-up writes (enforce() and a kick).
+// Only with VBUS present and outside HIZ (HIZ turns the ADC off, quiet
+// leases and full-hold are left alone), after CORE_RECOVER_S of stale
+// results, then with a doubling wait up to CORE_RECOVER_MAX_S. Results
+// fresh for CORE_RECOVER_OK_S start the backoff over. REG0F is never
+// written by the recovery, so EN_CHG stays as the policy has it and the
+// chip's own OVP keeps the converter off. VREG, ICHG and the limits are
+// never written.
+static int recover_due(struct core *c, double now)
+{
+    if (c->valid)
+    {
+        if (c->fresh_since < 0)
+            c->fresh_since = now;
+        if (c->recover_wait)
+        {
+            core_log(5, "ADC results fresh again after the charger init");
+            c->recover_wait = 0;
+        }
+        if (c->recover_n && now - c->fresh_since >= CORE_RECOVER_OK_S)
+        {
+            c->recover_n = 0;
+            c->recover_next = 0;
+        }
+        return 0;
+    }
+    c->fresh_since = -1;
+    if (!c->m.vbus_present || (c->regs[BQ_REG_CTRL0] & BQ_EN_HIZ) || c->pol.want_hiz)
+    {
+        c->recover_ref = now;       // the stale time starts again after HIZ
+        return 0;
+    }
+    double since = c->adc_changed > c->recover_ref ? c->adc_changed : c->recover_ref;
+    return now - since >= CORE_RECOVER_S && now >= c->recover_next;
+}
+
+static void recover_start(struct core *c, double now)
+{
+    double wait = CORE_RECOVER_S * pow(2, c->recover_n + 1);
+    if (wait > CORE_RECOVER_MAX_S)
+        wait = CORE_RECOVER_MAX_S;
+    c->recover_n++;
+    c->recoveries++;
+    c->recover_next = now + wait;
+    c->recover_wait = 1;
+    uint8_t f0 = (c->m.fault0 | (now < c->fault_until ? c->fflag0_recent : 0)) & FAULT0_MASK;
+    double stale = c->adc_changed > 0 ? c->age : now - c->recover_ref;
+    core_log(4, "ADC results unchanged for %.0f s with USB present%s, charger init again "
+             "(attempt %d, the next one in %.0f s at the earliest)", stale,
+             f0 & BQ_VBAT_OVP ? " and VBAT_OVP" : "", c->recover_n, wait);
+    if (bq_restore_keep0f(&c->io) < 0)
+        c->fails++;
+    c->recover_phase = 1;
+    c->applied_valid = 0;           // the next enforce() is not an outside change
+    c->last_kick = now;
 }
 
 void core_poll(struct core *c, double now, double wall)
@@ -236,6 +319,15 @@ void core_poll(struct core *c, double now, double wall)
     }
     c->age = now - c->adc_changed;
     c->valid = c->age <= CORE_STALE_S;
+    if (c->valid)
+        c->vbat_fresh = c->m.vbat;
+    if (c->recover_phase)
+    {
+        // Second half of a recovery: the start-up writes in this poll.
+        c->recover_phase = 0;
+        c->recover_ref = now;
+        c->last_kick = -1e9;
+    }
     if (!c->valid && c->adc_changed > 0 && now - c->last_stale_log >= CORE_LOG_S)
     {
         core_log(4, "ADC results unchanged for %.0f s, marked stale", c->age);
@@ -259,7 +351,13 @@ void core_poll(struct core *c, double now, double wall)
     fill_input(c, &in, now, 1);
     policy_step(&c->pol, &in);
     c->pending_full |= c->pol.full_event;
-    if (enforce(c, now) < 0)
+    if (in.ovp_full && !c->ovp_full)
+        core_log(5, "VBAT_OVP at the end of charge (last fresh VBAT %.3f V, VREG %.2f V), "
+                 "state full, the fault stays in Faults", c->vbat_fresh, c->m.vreg);
+    c->ovp_full = in.ovp_full;
+    if (recover_due(c, now))
+        recover_start(c, now);
+    else if (enforce(c, now) < 0)
         c->fails++;
 
     if (now - c->last_kick >= CORE_KICK_S)

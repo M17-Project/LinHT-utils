@@ -216,6 +216,249 @@ static void stale(void)
     CHECK(c.valid);
 }
 
+// The Rev C end of charge: VBAT_OVP every second and every ADC result
+// frozen. The chip sets the OVP flag again on every new edge, the test
+// sets it before each poll.
+static int ovp_on;
+
+static void poll_ovp(int seconds)
+{
+    for (int k = 0; k < seconds; k++)
+    {
+        if (ovp_on)
+            f.r[BQ_REG_FFLAG0] |= BQ_VBAT_OVP;
+        poll_for(1);
+    }
+}
+
+static void ovp_start(void)
+{
+    f.r[BQ_REG_FAULT0] = BQ_VBAT_OVP;
+    f.r[BQ_REG_STAT1] = 0;                      // not charging
+    f.adc_frozen = 1;
+    ovp_on = 1;
+}
+
+static void ovp_end(void)
+{
+    f.r[BQ_REG_FAULT0] = 0;
+    ovp_on = 0;
+}
+
+// Polls until the next recovery attempt, at most max seconds. Returns the
+// seconds polled, or -1 without an attempt.
+static int until_recovery(int max)
+{
+    unsigned n = c.recoveries;
+    for (int k = 1; k <= max; k++)
+    {
+        poll_ovp(1);
+        if (c.recoveries != n)
+            return k;
+    }
+    return -1;
+}
+
+static void end_of_charge(void)
+{
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.44, 0.23);
+    f.r[BQ_REG_STAT1] = 4 << 5;                 // taper
+    poll_for(10);
+    CHECK(c.valid && c.pol.state == ST_CHARGING);
+    double anchors = c.tel.anchored;
+
+    ovp_start();
+    poll_ovp(10);
+    CHECK(!c.valid);
+    CHECK(c.pol.state == ST_FULL);              // not "fault"
+    CHECK(c.pol.block == BLK_FAULT);            // quiet still refused
+    const char *names[4];
+    CHECK(core_faults(&c, names, 4) == 1 && !strcmp(names[0], "vbat-ovp"));
+    CHECK(c.tel.anchored == anchors);           // no SoC anchor from the OVP
+    unsigned g;
+    CHECK(policy_quiet(&c.pol, ":1.20", 60, now, &g) == PERR_FAULT);
+
+    // First attempt after 60 s of stale results.
+    unsigned w2e = f.writes[BQ_REG_ADC];
+    int k = until_recovery(120);
+    CHECK(k > 40 && k <= 55);                   // 60 s after the last change
+    CHECK(c.recoveries == 1);
+    CHECK(f.r[BQ_REG_ADC] == BQ_STOCK_REG2E);   // stock values first
+    CHECK(!(f.r[BQ_REG_CTRL5] & BQ_EN_IBAT));
+    CHECK(!(f.r[BQ_REG_CTRL3] & BQ_PFM_FWD_DIS));
+    CHECK(f.r[BQ_REG_CTRL0] == 0xa2);           // REG0F not touched
+    poll_ovp(1);
+    CHECK(f.r[BQ_REG_ADC] == BQ_ADC_EN);        // then the start-up writes
+    CHECK(f.r[BQ_REG_CTRL5] & BQ_EN_IBAT);
+    CHECK(f.r[BQ_REG_CTRL3] & BQ_PFM_FWD_DIS);
+    CHECK(f.writes[BQ_REG_ADC] == w2e + 2);
+    CHECK(only_allowed_writes());
+    CHECK(f.wd_expiries == 0);
+
+    // Still frozen: the waits double up to one hour.
+    double t = now - 1;
+    double gaps[8];
+    for (int i = 0; i < 8; i++)
+    {
+        k = until_recovery(4000);
+        gaps[i] = now - t;
+        t = now;
+    }
+    CHECK_NEAR(gaps[0], 120, 1.5);
+    CHECK_NEAR(gaps[1], 240, 1.5);
+    CHECK_NEAR(gaps[2], 480, 1.5);
+    CHECK_NEAR(gaps[3], 960, 1.5);
+    CHECK_NEAR(gaps[4], 1920, 1.5);
+    CHECK_NEAR(gaps[5], 3600, 1.5);
+    CHECK_NEAR(gaps[6], 3600, 1.5);
+    CHECK(c.recoveries == 9);
+    CHECK(only_allowed_writes());
+
+    // The init helped: fresh results, charging again.
+    ovp_end();
+    f.adc_frozen = 0;
+    fake_adc(&f, 8.39, 0.46);
+    f.r[BQ_REG_STAT1] = 3 << 5;
+    poll_for(11);
+    CHECK(c.valid && !c.recover_wait);
+    CHECK(c.pol.state == ST_CHARGING);
+    CHECK(c.recover_n == 9);                    // backoff kept for 10 min
+    poll_for(600);
+    CHECK(c.recover_n == 0);
+
+    // The next end of charge gets a quick attempt again.
+    fake_adc(&f, 8.44, 0.23);
+    poll_for(5);
+    ovp_start();
+    k = until_recovery(120);
+    CHECK(k > 50 && k <= 60);
+    CHECK(c.recoveries == 10);
+    ovp_end();
+    f.adc_frozen = 0;
+    poll_for(5);
+}
+
+// SetCharging(false) stays: the recovery never writes EN_CHG.
+static void ovp_charging_off(void)
+{
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.42, 0.1);
+    poll_for(5);
+    policy_set_charging(&c.pol, 0);
+    core_apply(&c, now);
+    CHECK(!(f.r[BQ_REG_CTRL0] & BQ_EN_CHG));
+    ovp_start();
+    unsigned w0f = f.writes[BQ_REG_CTRL0];
+    int bad = 0;
+    for (int i = 0; i < 450; i++)
+    {
+        poll_ovp(1);
+        bad |= !!(f.r[BQ_REG_CTRL0] & (BQ_EN_CHG | BQ_EN_HIZ));
+    }
+    CHECK(!bad);
+    CHECK(f.writes[BQ_REG_CTRL0] == w0f);
+    CHECK(c.recoveries == 3);                   // about 60, 180 and 420 s
+    ovp_end();
+    f.adc_frozen = 0;
+}
+
+// HIZ turns the ADC off by design: no recovery during a quiet lease, and
+// the 60 s start again when the lease ends.
+static void stale_in_quiet(void)
+{
+    unsigned g;
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    poll_for(5);
+    CHECK(policy_quiet(&c.pol, ":1.30", 300, now, &g) == PERR_OK && g == 300);
+    core_apply(&c, now);
+    f.adc_frozen = 1;
+    poll_for(299);
+    CHECK(c.pol.state == ST_QUIET && !c.valid);
+    CHECK(c.recoveries == 0);
+    poll_for(1);                                // the lease ends
+    CHECK(c.pol.state == ST_CHARGING);
+    CHECK(until_recovery(59) < 0);
+    CHECK(until_recovery(5) > 0);
+    CHECK(c.recoveries == 1);
+    f.adc_frozen = 0;
+
+    // Full-hold is HIZ too.
+    setup();
+    c.cfg.full_hold = 1;
+    CHECK(core_init(&c, now) == 0);
+    poll_for(2);
+    f.r[BQ_REG_STAT1] = BQ_CHG_DONE << 5;
+    poll_for(2);
+    CHECK(c.pol.state == ST_FULL_HOLD);
+    f.adc_frozen = 1;
+    poll_for(600);
+    CHECK(c.recoveries == 0);
+    f.adc_frozen = 0;
+
+    // On battery there is no recovery either.
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    poll_for(2);
+    fake_usb(&f, 0);
+    f.adc_frozen = 1;
+    poll_for(600);
+    CHECK(c.recoveries == 0);
+    f.adc_frozen = 0;
+}
+
+// VBAT_OVP that is not the end of charge stays "fault".
+static void ovp_is_fault(void)
+{
+    // The last fresh VBAT was above 101 % of VREG.
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.60, 0.0);
+    poll_for(5);
+    ovp_start();
+    poll_ovp(3);
+    CHECK(c.pol.state == ST_FAULT);
+    ovp_end();
+
+    // Far below VREG.
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 7.9, 0.5);
+    poll_for(5);
+    ovp_start();
+    poll_ovp(3);
+    CHECK(c.pol.state == ST_FAULT);
+    ovp_end();
+
+    // A second fault next to VBAT_OVP.
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.42, 0.1);
+    poll_for(5);
+    ovp_start();
+    f.r[BQ_REG_FAULT1] = 0x04;                  // thermal shutdown
+    poll_ovp(3);
+    CHECK(c.pol.state == ST_FAULT);
+    f.r[BQ_REG_FAULT1] = 0;
+    ovp_end();
+
+    // Frozen from the start: no fresh VBAT to judge by.
+    setup();
+    fake_adc(&f, 8.42, 0.1);
+    f.r[BQ_REG_FAULT0] = BQ_VBAT_OVP;
+    f.adc_frozen = 1;
+    CHECK(core_init(&c, now) == 0);
+    poll_for(3);
+    CHECK(c.pol.state == ST_FAULT);
+    // A restart into a stopped ADC is recovered too.
+    CHECK(until_recovery(60) == 57);
+    ovp_end();
+    f.adc_frozen = 0;
+}
+
 static void cycle_log(void)
 {
     struct tel_cycle cy;
@@ -269,6 +512,10 @@ void test_core(void)
     quiet_and_usb();
     chip_errors_and_faults();
     stale();
+    end_of_charge();
+    ovp_charging_off();
+    stale_in_quiet();
+    ovp_is_fault();
     cycle_log();
     config_file();
 

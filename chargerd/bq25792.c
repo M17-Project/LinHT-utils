@@ -166,6 +166,21 @@ int bq_kick(struct bq_io *io)
     return bq_update(io, BQ_REG_CTRL1, BQ_WD_RST, BQ_WD_RST, 1);
 }
 
+int bq_restore_keep0f(struct bq_io *io)
+{
+    int rc, err = 0;
+
+    if ((rc = bq_update(io, BQ_REG_CTRL3, BQ_PFM_FWD_DIS, 0, 0)) < 0)
+        err = rc;
+    if ((rc = bq_update(io, BQ_REG_CTRL5, BQ_EN_IBAT, 0, 0)) < 0)
+        err = rc;
+    if ((rc = bq_update(io, BQ_REG_ADC, 0xff, BQ_STOCK_REG2E, 0)) < 0)
+        err = rc;
+    if ((rc = bq_kick(io)) < 0)
+        err = rc;
+    return err;
+}
+
 int bq_restore(struct bq_io *io, uint8_t rb[5])
 {
     static const uint8_t reg[5] = { BQ_REG_CTRL0, BQ_REG_CTRL1, BQ_REG_CTRL3, BQ_REG_CTRL5, BQ_REG_ADC };
@@ -174,13 +189,7 @@ int bq_restore(struct bq_io *io, uint8_t rb[5])
     // Each step is tried even when an earlier one failed.
     if ((rc = bq_update(io, BQ_REG_CTRL0, BQ_EN_HIZ | BQ_EN_CHG, BQ_EN_CHG, 0)) < 0)
         err = rc;
-    if ((rc = bq_update(io, BQ_REG_CTRL3, BQ_PFM_FWD_DIS, 0, 0)) < 0)
-        err = rc;
-    if ((rc = bq_update(io, BQ_REG_CTRL5, BQ_EN_IBAT, 0, 0)) < 0)
-        err = rc;
-    if ((rc = bq_update(io, BQ_REG_ADC, 0xff, BQ_STOCK_REG2E, 0)) < 0)
-        err = rc;
-    if ((rc = bq_kick(io)) < 0)
+    if ((rc = bq_restore_keep0f(io)) < 0)
         err = rc;
     for (int i = 0; i < 5; i++)
         if ((rc = io->read(io->ctx, reg[i], &rb[i], 1)) < 0)

@@ -208,7 +208,9 @@ void policy_step(struct policy *p, const struct policy_in *in)
     {
         end_all(p);
         p->holding = 0;
-        p->state = ST_FAULT;
+        // VBAT_OVP right at the end of charge says "full", the fault stays
+        // in Faults and quiet stays refused. No full anchor here.
+        p->state = in->ovp_full ? ST_FULL : ST_FAULT;
         p->block = BLK_FAULT;
         p->want_hiz = 0;
         p->want_chg = p->charging_enabled;

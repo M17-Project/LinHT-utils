@@ -157,6 +157,22 @@ static void fault_and_chip(void)
     step(2);
     CHECK(p.state == ST_CHARGING);
 
+    // VBAT_OVP at the end of charge: "full", still blocked, no anchor, and
+    // EN_CHG as SetCharging has it.
+    CHECK(policy_quiet(&p, ":1.53", 300, 2, &g) == PERR_OK);
+    in.fault = in.ovp_full = 1;
+    step(2.5);
+    CHECK(p.state == ST_FULL && !p.full && !p.full_event && p.nlease == 0);
+    CHECK(p.block == BLK_FAULT && !p.want_hiz && p.want_chg);
+    CHECK(policy_quiet(&p, ":1.53", 300, 2.5, &g) == PERR_FAULT);
+    policy_set_charging(&p, 0);
+    step(2.6);
+    CHECK(p.state == ST_FULL && !p.want_chg);
+    policy_set_charging(&p, 1);
+    in.fault = in.ovp_full = 0;
+    step(2.7);
+    CHECK(p.state == ST_CHARGING && !p.full);
+
     // Chip error: leases are kept, new ones refused, wanted bits unchanged.
     CHECK(policy_quiet(&p, ":1.51", 300, 2, &g) == PERR_OK);
     step(3);

@@ -20,6 +20,10 @@
 #define CORE_SAVE_S        900.0    // state file period while it changes
 #define CORE_LOG_S         60.0     // repeated messages at most this often
 #define CORE_MAX_FAULTS    16
+#define CORE_RECOVER_S     60.0     // stale with USB this long: charger init again
+#define CORE_RECOVER_MAX_S 3600.0   // longest wait between two attempts
+#define CORE_RECOVER_OK_S  600.0    // fresh this long: the backoff starts over
+#define CORE_OVP_FULL_V    0.05     // VBAT_OVP at VREG minus this or more is "full"
 
 struct core
 {
@@ -48,6 +52,17 @@ struct core
 
     uint8_t fflag0_recent, fflag1_recent;
     double fault_until;
+
+    // Recovery of a stopped ADC (see core_poll).
+    double recover_ref;             // stale time counts from here at most
+    double recover_next;            // earliest next attempt
+    double fresh_since;             // results fresh since, or -1
+    int recover_n;                  // attempts since the last 10 min fresh
+    int recover_phase;              // 1: stock values written, start-up writes next poll
+    int recover_wait;               // an attempt waits for fresh results
+    unsigned recoveries;            // attempts since the start
+    double vbat_fresh;              // last fresh VBAT, NaN before the first
+    int ovp_full;                   // VBAT_OVP at the end of charge, logged once
 
     struct tel_saved saved;
     int restore_pending;
