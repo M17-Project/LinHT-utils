@@ -23,7 +23,7 @@ struct props
     double soc, energy, cap_rated, cap_learned, soh, cycles;
     const char *soc_source, *soh_source;
     double cap_partial, cap_partial_w;
-    uint32_t cap_partial_n;
+    uint32_t cap_partial_n, recoveries;
     int64_t runtime, ttf;
     uint64_t onbat, charging;
 };
@@ -72,6 +72,7 @@ static void refresh(struct props *p)
     p->pbus = m->vbus * m->ibus;
     p->tdie = m->tdie;
     p->age = c->age;
+    p->recoveries = c->recoveries;
     p->pavg1 = tel_avg_power(t, 60);
     p->pavg10 = tel_avg_power(t, 600);
     p->pavg60 = tel_avg_power(t, 3600);
@@ -343,6 +344,7 @@ static const sd_bus_vtable vtable[] = {
     P("UsbPower", "d", get_d, pbus, 0),
     P("DieTemperature", "d", get_d, tdie, 0),
     P("MeasurementAgeSec", "d", get_d, age, 0),
+    P("ChargerRecoveries", "u", get_u, recoveries, 0),
     P("BatteryPowerAvg1m", "d", get_d, pavg1, 0),
     P("BatteryPowerAvg10m", "d", get_d, pavg10, 0),
     P("BatteryPowerAvg60m", "d", get_d, pavg60, 0),

@@ -7,6 +7,7 @@ What it does:
 
 - keeps the charger in host mode and kicks its 40 s watchdog every 10 s,
 - reads the charger ADC once per second (continuous conversion, 15 bit),
+  and sets the charger up again when the ADC stops on USB,
 - offers the readings, averages and battery estimates on the system D-Bus,
 - gives quiet leases. A lease puts the charger in HIZ, the only state in
   which the charger does not raise the receiver noise floor,
@@ -122,6 +123,7 @@ Measurements, poll them with `GetAll` every 1 to 5 s:
 | `BatteryPower`, `UsbPower` | W | V times I |
 | `DieTemperature` | °C | charger die, not the battery |
 | `MeasurementAgeSec` | s | time since the ADC results last changed |
+| `ChargerRecoveries` | u | charger init attempts for a stopped ADC since the start, see below |
 | `BatteryPowerAvg1m`, `Avg10m`, `Avg60m` | W | NaN with less than half a window |
 | `BatteryCurrentAvg1m`, `Avg10m`, `Avg60m` | A | same |
 | `StateOfChargePercent` | % | estimate |
@@ -211,7 +213,7 @@ States, in priority order:
 | State | When | Charger |
 |---|---|---|
 | `chip-error` | 3 failed polls in a row | nothing possible, retry every 5 s, leases kept |
-| `fault` | REG20 or REG21 fault, or a fault flag in the last 10 s | HIZ off, quiet refused |
+| `fault` | REG20 or REG21 fault, or a fault flag in the last 10 s. VBAT_OVP at the end of charge is shown as `full`, see below | HIZ off, quiet refused |
 | `on-battery` | no USB power good | nothing to switch |
 | `quiet` | USB and at least one lease | EN_HIZ = 1 |
 | `full-hold` | USB, battery full, `full_hold = on` | EN_HIZ = 1 until the SoC is below `full_hold_resume_soc` |
@@ -222,6 +224,46 @@ States, in priority order:
 The second `full` rule is for a weak USB source, where the charger stays in
 VINDPM and never terminates. `full` ends after 10 s with IBAT above 0.3 A or
 VBAT more than 0.15 V below VREG.
+
+### VBAT_OVP at the end of charge and a stopped ADC
+
+The Rev C unit showed this twice at the end of a charge: in constant voltage
+at about 8.44 V and 0.23 A (VREG 8.40 V) the charger set VBAT_OVP, stopped
+charging, and from then on every ADC result stayed the same, for hours. The
+data sheet says that the ADC keeps converting after a fault, so this is
+chip behaviour the data sheet does not describe. Turning ADC_EN off and on
+by hand did not restart the ADC. A restart of the daemon did, and the
+charge went on at once.
+
+The daemon now does the same writes as a restart by itself:
+
+- When the ADC results have not changed for 60 s, VBUS is present and the
+  charger is not in HIZ, it writes the stock values of the clean stop except
+  REG0F (PFM_FWD_DIS 0, EN_IBAT 0, REG2E 0x30, WD_RST). One poll later it
+  writes the start-up values again (PFM, EN_IBAT, REG2E continuous 15 bit,
+  WD_RST). The journal says "charger init again" and `ChargerRecoveries`
+  counts the attempts.
+- If the results stay frozen, the next attempt waits 120 s, then 240 s and
+  so on, at most one hour. Results that stay fresh for 10 min start this
+  over, so every end of charge gets a quick attempt.
+- HIZ turns the ADC off by design. A quiet lease or full-hold therefore
+  never starts a recovery, and the 60 s start again when HIZ ends. On
+  battery there is no recovery either.
+- The recovery never writes REG0F. EN_CHG stays as `SetCharging` has it and
+  the charger's own OVP keeps the converter off as long as it is active.
+  VREG, ICHG, the input limits and the protections are never written.
+
+A VBAT_OVP that comes right at the end of charge is shown as State `full`,
+not `fault`, when all of this holds: VBAT_OVP is the only fault (status or
+flag), VBUS is present, VREG is not above 4.2 V per cell, and the last fresh
+VBAT was between VREG minus 0.05 V and 101 % of VREG (the lowest OVP release
+level of the data sheet, 8.48 V at 8.40 V). The battery is then at the end
+of its charge and the charger only stopped early. `Faults` still lists
+`vbat-ovp`, `QuietBlockedReason` stays `fault` and quiet is refused. The
+SoC is not anchored at 100 %, because the charge did not terminate (the
+current was above the 0.2 A of the `full` rule) and the frozen results
+cannot show the true end. Any other VBAT_OVP, for example with a fresh VBAT
+above 101 % of VREG, stays `fault`.
 
 ### Fail safe
 

@@ -51,6 +51,8 @@
 
 #define BQ_CHG_DONE     7       // CHG_STAT
 
+#define BQ_VBAT_OVP     0x20    // REG20 VBAT_OVP_STAT, REG26 VBAT_OVP_FLAG
+
 // Stock values after a clean stop (data sheet reset values, REG10 and
 // REG14 as read on the LinHT units in default mode).
 #define BQ_STOCK_REG0F  0xa2
@@ -120,6 +122,12 @@ int bq_kick(struct bq_io *io);
 // Writes stock values (not values saved at start), then reads back REG0F,
 // REG10, REG12, REG14 and REG2E into rb[5].
 int bq_restore(struct bq_io *io, uint8_t rb[5]);
+
+// The part of bq_restore() after REG0F: PFM_FWD_DIS 0, EN_IBAT 0, REG2E
+// 0x30 (ADC off, 12 bit) and WD_RST. REG0F (EN_HIZ, EN_CHG) is not touched.
+// A daemon restart is this followed by the start-up writes, the chip
+// recovery does the same. Returns 0 or a negative errno.
+int bq_restore_keep0f(struct bq_io *io);
 
 const char *bq_chg_stat_name(int stat);
 
