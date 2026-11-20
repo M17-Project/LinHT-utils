@@ -13,25 +13,29 @@
 #define CYCLE_MIN_SOC    10.0   // %, shorter cycles are not logged
 #define CHARGE_IBAT_MIN  0.05   // A, a real charge ends a learning discharge
 
-// Partial cycles. In HIZ the load is small and steady, so VBAT is close to
-// the open circuit voltage and the voltage table gives the SoC at both ends
-// of a discharge segment. The load drop is about the same at both ends and
-// mostly cancels. The estimate is low precision: the table is generic.
-#define PART_SETTLE_S    600.0  // s, VBAT relaxes after a charge, not counted
+// Partial cycles, low precision. A segment runs from one rest point to a
+// later one. A rest point is a moment after at least 10 min of discharge
+// without charge current at a light mean load: in quiet (HIZ on USB) or on
+// battery with the radio idle. VBAT is then close to the open circuit
+// voltage and the table gives the SoC. Heavy use in between (TX in the
+// field) does not matter, the energy is counted. The load drop at the two
+// rest points is about the same and mostly cancels. The table is generic.
+#define PART_REST_S      600.0  // s of discharge without charge before a rest point
+#define PART_REST_I      0.3    // A, the 10 min and 1 min mean load of a rest point
 #define PART_DEPTH_MIN   15.0   // %, shallower segments are not used
 #define PART_DEPTH_REF   20.0   // %, depth of weight 1
 #define PART_W_DEPTH_MAX 9.0    // depth weight limit (60 % deep)
-#define PART_I_REF       0.25   // A, load current that halves the weight
-#define PART_I_MAX       0.6    // A, heavier mean loads are not used
+#define PART_I_REF       0.25   // A, rest load that halves the weight
+#define PART_I_MAX       0.6    // A, heavier mean loads of a segment are not used
 #define PART_EST_LO      0.4    // a segment estimate outside 0.4 to 1.6
 #define PART_EST_HI      1.6    //   times rated is dropped as implausible
 #define PART_PRIOR_W     1.0    // weight of the starting value
 #define PART_DECAY       0.9    // older segments lose 10 % per new one
 
-enum { PART_IDLE, PART_SETTLE, PART_COUNT };
-
 // Per cell open circuit points of a generic NMC cell, the table of
-// field-log.py. Under load and while charging it is off by 10 to 20 %.
+// field-log.py, 100 % at 4.20 V. Under load and while charging it is off by
+// 10 to 20 %. The daemon scales it so that 100 % is the configured charge
+// voltage: at 4.15 V per cell the table says 95 %, which becomes 100 %.
 static const double ocv[][2] = {
     { 3.30, 0 }, { 3.50, 5 }, { 3.60, 10 }, { 3.70, 25 }, { 3.75, 40 }, { 3.80, 50 },
     { 3.87, 60 }, { 3.95, 70 }, { 4.03, 80 }, { 4.10, 90 }, { 4.20, 100 },
@@ -50,37 +54,74 @@ void tel_init(struct telemetry *t, const struct chargerd_config *cfg)
     t->learn_socv = NAN;
     t->part_wh = NAN;
     t->part_socv0 = t->part_socv = NAN;
+    t->part_i0 = t->part_i1 = NAN;
     t->part_est = t->part_weight = t->part_depth = NAN;
 }
 
-double tel_soc_from_voltage(const struct telemetry *t, double vbat)
+#define OCV_N ((int)(sizeof(ocv) / sizeof(ocv[0])))
+
+static double table_soc(double v)       // per cell
 {
-    int n = (int)(sizeof(ocv) / sizeof(ocv[0]));
-    if (isnan(vbat) || vbat < 1.0)
-        return NAN;
-    double v = vbat / (t->cfg->cells > 0 ? t->cfg->cells : 2);
     if (v <= ocv[0][0])
         return 0;
-    for (int i = 1; i < n; i++)
+    for (int i = 1; i < OCV_N; i++)
         if (v <= ocv[i][0])
             return ocv[i - 1][1] + (ocv[i][1] - ocv[i - 1][1]) * (v - ocv[i - 1][0]) /
                    (ocv[i][0] - ocv[i - 1][0]);
     return 100;
 }
 
-double tel_voltage_from_soc(const struct telemetry *t, double soc)
+static double table_voltage(double soc) // per cell
 {
-    int n = (int)(sizeof(ocv) / sizeof(ocv[0]));
-    int cells = t->cfg->cells > 0 ? t->cfg->cells : 2;
+    if (soc <= ocv[0][1])
+        return ocv[0][0];
+    for (int i = 1; i < OCV_N; i++)
+        if (soc <= ocv[i][1])
+            return ocv[i - 1][0] + (ocv[i][0] - ocv[i - 1][0]) * (soc - ocv[i - 1][1]) /
+                                       (ocv[i][1] - ocv[i - 1][1]);
+    return ocv[OCV_N - 1][0];
+}
+
+static int cells_of(const struct chargerd_config *cfg)
+{
+    return cfg->cells > 0 ? cfg->cells : 2;
+}
+
+// Table SoC of the configured charge voltage, the 100 % of the daemon.
+static double table_top(const struct chargerd_config *cfg)
+{
+    double v = cfg->charge_voltage_v;
+    if (!(v > 0))
+        return 100;
+    double top = table_soc(v / cells_of(cfg));
+    return top >= 50 ? top : 100;
+}
+
+double tel_ocv_soc(const struct chargerd_config *cfg, double vbat)
+{
+    if (isnan(vbat) || vbat < 1.0)
+        return NAN;
+    double soc = 100.0 * table_soc(vbat / cells_of(cfg)) / table_top(cfg);
+    return soc > 100 ? 100 : soc;
+}
+
+double tel_ocv_voltage(const struct chargerd_config *cfg, double soc)
+{
     if (isnan(soc))
         return NAN;
-    if (soc <= ocv[0][1])
-        return cells * ocv[0][0];
-    for (int i = 1; i < n; i++)
-        if (soc <= ocv[i][1])
-            return cells * (ocv[i - 1][0] + (ocv[i][0] - ocv[i - 1][0]) * (soc - ocv[i - 1][1]) /
-                                                (ocv[i][1] - ocv[i - 1][1]));
-    return cells * ocv[n - 1][0];
+    if (soc > 100)
+        soc = 100;
+    return cells_of(cfg) * table_voltage(soc * table_top(cfg) / 100.0);
+}
+
+double tel_soc_from_voltage(const struct telemetry *t, double vbat)
+{
+    return tel_ocv_soc(t->cfg, vbat);
+}
+
+double tel_voltage_from_soc(const struct telemetry *t, double soc)
+{
+    return tel_ocv_voltage(t->cfg, soc);
 }
 
 static double ring_avg(const struct telemetry *t, const float *buf, unsigned window)
@@ -148,32 +189,37 @@ static void learn_finish(struct telemetry *t)
     t->changed = 1;
 }
 
-// End of a partial discharge segment: C_est = E_out / (SoC_v0 - SoC_v1).
+// End of a partial discharge segment, from the start to the last rest
+// point: C_est = E_out / (SoC_v0 - SoC_v1).
 static void partial_finish(struct telemetry *t)
 {
     const struct chargerd_config *cfg = t->cfg;
-    int counting = t->part_state == PART_COUNT;
+    int counting = t->part_state == TEL_PART_COUNT;
 
-    t->part_state = PART_IDLE;
-    if (!counting || t->part_t <= 0 || t->part_e <= 0)
+    t->part_state = TEL_PART_IDLE;
+    if (!counting || t->part_t1 <= 0 || t->part_e1 <= 0)
         return;
     double depth = t->part_socv0 - t->part_socv;
     if (isnan(depth) || depth < PART_DEPTH_MIN)
         return;
-    double i_mean = t->part_q / (t->part_t / 3600.0);
+    double i_mean = t->part_q1 / (t->part_t1 / 3600.0);
     if (i_mean > PART_I_MAX)
         return;
-    double est = t->part_e / (depth / 100.0);
+    double est = t->part_e1 / (depth / 100.0);
     if (est < PART_EST_LO * cfg->capacity_rated_wh || est > PART_EST_HI * cfg->capacity_rated_wh)
         return;
 
     // The table error at the two ends is a few % of SoC, so the error of
-    // C_est falls with the depth: weight by depth squared. The load moves
-    // VBAT away from the open circuit voltage: less weight under load.
+    // C_est falls with the depth: weight by depth squared. The load at the
+    // rest points moves VBAT away from the open circuit voltage: less
+    // weight with more load there.
     double wd = (depth / PART_DEPTH_REF) * (depth / PART_DEPTH_REF);
     if (wd > PART_W_DEPTH_MAX)
         wd = PART_W_DEPTH_MAX;
-    double w = wd / (1.0 + (i_mean / PART_I_REF) * (i_mean / PART_I_REF));
+    double i_rest = 0.5 * (t->part_i0 + t->part_i1);
+    if (isnan(i_rest) || i_rest < 0)
+        i_rest = 0;
+    double w = wd / (1.0 + (i_rest / PART_I_REF) * (i_rest / PART_I_REF));
 
     if (t->part_n == 0)
     {
@@ -191,41 +237,51 @@ static void partial_finish(struct telemetry *t)
     t->changed = 1;
 }
 
+// Rest points and the energy between them. Called after the ring got the
+// sample of this poll.
 static void partial_sample(struct telemetry *t, const struct tel_in *in, double p, double i,
                            double dt)
 {
+    if (in->discharging && i <= CHARGE_IBAT_MIN)
+        t->rest_t += dt;
+    else
+        t->rest_t = 0;
+
     if (in->discharging)
     {
-        if (t->part_state == PART_IDLE)
+        if (t->part_state == TEL_PART_COUNT)
         {
-            t->part_state = PART_SETTLE;
-            t->part_t = 0;
-        }
-        if (t->part_state == PART_SETTLE)
-        {
+            if (p < 0)
+                t->part_e += -p * dt / 3600.0;
+            if (i < 0)
+                t->part_q += -i * dt / 3600.0;
             t->part_t += dt;
-            if (t->part_t >= PART_SETTLE_S && in->valid && !isnan(t->soc_voltage))
-            {
-                t->part_state = PART_COUNT;
-                t->part_t = t->part_e = t->part_q = 0;
-                t->part_socv0 = t->part_socv = t->soc_voltage;
-            }
-            return;
         }
-        if (p < 0)
-            t->part_e += -p * dt / 3600.0;
-        if (i < 0)
-            t->part_q += -i * dt / 3600.0;
-        t->part_t += dt;
-        if (in->valid)
-            t->part_socv = t->soc_voltage;
+        if (t->rest_t < PART_REST_S || !in->valid || isnan(t->soc_voltage))
+            return;
+        double i10 = -tel_avg_current(t, (unsigned)PART_REST_S);
+        double i1 = -tel_avg_current(t, 60);
+        if (isnan(i10) || isnan(i1) || i10 > PART_REST_I || i1 > PART_REST_I)
+            return;
+        if (t->part_state != TEL_PART_COUNT)
+        {
+            t->part_state = TEL_PART_COUNT;
+            t->part_t = t->part_e = t->part_q = 0;
+            t->part_socv0 = t->soc_voltage;
+            t->part_i0 = i10;
+        }
+        t->part_socv = t->soc_voltage;
+        t->part_i1 = i10;
+        t->part_t1 = t->part_t;
+        t->part_e1 = t->part_e;
+        t->part_q1 = t->part_q;
     }
     else if ((in->charging && i > CHARGE_IBAT_MIN) || in->full_event)
     {
         partial_finish(t);
     }
     // Otherwise (USB without charge, a short gap between leases) the
-    // segment waits.
+    // segment waits. The rest time starts again.
 }
 
 static void seg_finish(struct telemetry *t, const struct tel_in *in)
@@ -494,6 +550,17 @@ void tel_save(const struct telemetry *t, struct tel_saved *s)
     s->part_wh = t->part_wh;
     s->part_w = t->part_w;
     s->part_n = t->part_n;
+    if (t->part_state == TEL_PART_COUNT && t->part_t1 > 0)
+    {
+        s->part_active = 1;
+        s->part_socv0 = t->part_socv0;
+        s->part_socv1 = t->part_socv;
+        s->part_i0 = t->part_i0;
+        s->part_i1 = t->part_i1;
+        s->part_e1 = t->part_e1;
+        s->part_q1 = t->part_q1;
+        s->part_t1 = t->part_t1;
+    }
 }
 
 int tel_restore(struct telemetry *t, const struct tel_saved *s, double vbat)
@@ -515,6 +582,20 @@ int tel_restore(struct telemetry *t, const struct tel_saved *s, double vbat)
         t->part_wh = clamp(s->part_wh, 0.5 * cfg->capacity_rated_wh, 1.1 * cfg->capacity_rated_wh);
         t->part_w = s->part_w;
         t->part_n = s->part_n;
+    }
+    // A segment of the last run ends here, at its last rest point. The
+    // unit was stopped or switched off, for example after use in the field.
+    if (s->part_active)
+    {
+        t->part_state = TEL_PART_COUNT;
+        t->part_socv0 = s->part_socv0;
+        t->part_socv = s->part_socv1;
+        t->part_i0 = s->part_i0;
+        t->part_i1 = s->part_i1;
+        t->part_e1 = s->part_e1;
+        t->part_q1 = s->part_q1;
+        t->part_t1 = s->part_t1;
+        partial_finish(t);
     }
 
     int reuse = 0;

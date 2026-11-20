@@ -66,6 +66,17 @@ int store_save(const char *dir, const struct tel_saved *s)
     num(f, "capacity_partial_wh", s->part_wh, 0);
     num(f, "partial_weight", s->part_w, 0);
     fprintf(f, "  \"partial_samples\": %d,\n", s->part_n);
+    fprintf(f, "  \"partial_active\": %d,\n", s->part_active);
+    if (s->part_active)
+    {
+        num(f, "partial_soc_voltage_start", s->part_socv0, 0);
+        num(f, "partial_soc_voltage_rest", s->part_socv1, 0);
+        num(f, "partial_load_start_a", s->part_i0, 0);
+        num(f, "partial_load_rest_a", s->part_i1, 0);
+        num(f, "partial_energy_wh", s->part_e1, 0);
+        num(f, "partial_charge_ah", s->part_q1, 0);
+        num(f, "partial_time_s", s->part_t1, 0);
+    }
     fprintf(f, "  \"clean_stop\": %d\n}\n", s->clean_stop);
     fclose(f);
 
@@ -94,7 +105,7 @@ static double get(const char *text, const char *key, double def)
 
 int store_load(const char *dir, struct tel_saved *s)
 {
-    char file[256], text[2048];
+    char file[256], text[4096];
     path(file, sizeof(file), dir, STORE_STATE);
     FILE *f = fopen(file, "r");
     if (!f)
@@ -122,6 +133,17 @@ int store_load(const char *dir, struct tel_saved *s)
     s->part_n = (int)get(text, "partial_samples", 0);
     if (isnan(s->part_wh) || isnan(s->part_w))
         s->part_n = 0;
+    s->part_active = (int)get(text, "partial_active", 0);
+    s->part_socv0 = get(text, "partial_soc_voltage_start", NAN);
+    s->part_socv1 = get(text, "partial_soc_voltage_rest", NAN);
+    s->part_i0 = get(text, "partial_load_start_a", NAN);
+    s->part_i1 = get(text, "partial_load_rest_a", NAN);
+    s->part_e1 = get(text, "partial_energy_wh", 0);
+    s->part_q1 = get(text, "partial_charge_ah", 0);
+    s->part_t1 = get(text, "partial_time_s", 0);
+    if (isnan(s->part_socv0) || isnan(s->part_socv1) || isnan(s->part_e1) || isnan(s->part_q1) ||
+        isnan(s->part_t1))
+        s->part_active = 0;
     if (isnan(s->cap_wh) || isnan(s->e_wh) || isnan(s->out_total_wh))
         return -EINVAL;
     return 0;

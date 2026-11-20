@@ -18,7 +18,7 @@ struct props
     const char *faults[CORE_MAX_FAULTS];
     int nfaults;
 
-    double vbat, vsys, vbus, ibat, ibus, pbat, pbus, tdie, age;
+    double vbat, vsys, vbus, ibat, ibus, pbat, pbus, tdie, age, vreg;
     double pavg1, pavg10, pavg60, iavg1, iavg10, iavg60;
     double soc, energy, cap_rated, cap_learned, soh, cycles;
     const char *soc_source, *soh_source;
@@ -71,6 +71,7 @@ static void refresh(struct props *p)
     p->pbat = m->vbat * m->ibat;
     p->pbus = m->vbus * m->ibus;
     p->tdie = m->tdie;
+    p->vreg = m->vreg;
     p->age = c->age;
     p->recoveries = c->recoveries;
     p->pavg1 = tel_avg_power(t, 60);
@@ -343,6 +344,7 @@ static const sd_bus_vtable vtable[] = {
     P("BatteryPower", "d", get_d, pbat, 0),
     P("UsbPower", "d", get_d, pbus, 0),
     P("DieTemperature", "d", get_d, tdie, 0),
+    P("ChargeVoltage", "d", get_d, vreg, 0),
     P("MeasurementAgeSec", "d", get_d, age, 0),
     P("ChargerRecoveries", "u", get_u, recoveries, 0),
     P("BatteryPowerAvg1m", "d", get_d, pavg1, 0),

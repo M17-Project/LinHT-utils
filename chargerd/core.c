@@ -35,6 +35,11 @@ double core_now(void)
     return ts.tv_sec + ts.tv_nsec * 1e-9;
 }
 
+int core_vreg_10mv(const struct core *c)
+{
+    return (int)lround(c->cfg.charge_voltage_v * 100.0);
+}
+
 int core_usb(const struct core *c)
 {
     return c->have_meas && c->m.vbus_present && c->m.power_good;
@@ -77,6 +82,7 @@ int core_init(struct core *c, double now)
 
     policy_init(&c->pol, &c->cfg);
     tel_init(&c->tel, &c->cfg);
+    double vreg_old = c->m.vreg;
 
     // Leases do not survive a restart: HIZ off first.
     rc = bq_update(&c->io, BQ_REG_CTRL0, BQ_EN_HIZ, 0, 0);
@@ -84,9 +90,12 @@ int core_init(struct core *c, double now)
         return rc;
     if ((rc = bq_read_all(&c->io, c->regs)) < 0)
         return rc;
-    struct bq_want w = { .hiz = 0, .chg = 1, .pfm = c->cfg.pfm };
+    struct bq_want w = { .hiz = 0, .chg = 1, .pfm = c->cfg.pfm, .vreg_10mv = core_vreg_10mv(c) };
     if ((rc = bq_enforce(&c->io, c->regs, &w)) < 0)
         return rc;
+    bq_decode(c->regs, &c->m);
+    if (rc & BQ_FIX_VREG)
+        core_log(5, "charge voltage VREG %.2f V written (was %.2f V)", c->m.vreg, vreg_old);
     c->applied = w;
     c->applied_valid = 1;
     if ((rc = bq_kick(&c->io)) < 0)
@@ -113,16 +122,19 @@ int core_init(struct core *c, double now)
     {
         core_log(4, "state file not read (%s), starting fresh", strerror(-rc));
     }
-    core_log(6, "charger BQ25792 rev %d, %dS, PFM %s, full-hold %s, rated %.1f Wh",
+    core_log(6, "charger BQ25792 rev %d, %dS, PFM %s, full-hold %s, rated %.1f Wh, VREG %.2f V, "
+             "quiet voltage limits %.2f V start, %.2f V end",
              c->regs[BQ_REG_PART] & 7, c->m.cells, c->cfg.pfm ? "on" : "off",
-             c->cfg.full_hold ? "on" : "off", c->cfg.capacity_rated_wh);
+             c->cfg.full_hold ? "on" : "off", c->cfg.capacity_rated_wh, c->m.vreg,
+             c->pol.min_vbat, c->pol.end_vbat);
     return 0;
 }
 
 // The fault is only VBAT_OVP (status or recent flag), on USB, and the last
 // fresh VBAT was at the end of charge: from VREG minus CORE_OVP_FULL_V up to
-// 101 % of VREG, the lowest OVP release level of the data sheet. VREG must
-// be a sane value for the cells. The daemon never writes VREG.
+// 101 % of VREG, the lowest OVP release level of the data sheet. VREG is
+// the value read back from the chip (charge_voltage_v once the daemon has
+// written it) and must be a sane value for the cells.
 static int ovp_at_full(const struct core *c, double now)
 {
     uint8_t f0 = c->m.fault0 & FAULT0_MASK, f1 = c->m.fault1 & FAULT1_MASK;
@@ -156,7 +168,8 @@ static void fill_input(struct core *c, struct policy_in *in, double now, int chi
 // means a watchdog expiry, a plug in or another writer: logged once a minute.
 static int enforce(struct core *c, double now)
 {
-    struct bq_want w = { .hiz = c->pol.want_hiz, .chg = c->pol.want_chg, .pfm = c->cfg.pfm };
+    struct bq_want w = { .hiz = c->pol.want_hiz, .chg = c->pol.want_chg, .pfm = c->cfg.pfm,
+                         .vreg_10mv = core_vreg_10mv(c) };
     int same = c->applied_valid && !memcmp(&w, &c->applied, sizeof(w));
     int rc = bq_enforce(&c->io, c->regs, &w);
     if (rc < 0)
@@ -167,9 +180,10 @@ static int enforce(struct core *c, double now)
     int unexpected = rc & ~(c->pol.want_hiz ? BQ_FIX_REG2E : 0);
     if (same && unexpected && now - c->last_fix_log >= CORE_LOG_S)
     {
-        core_log(5, "charger bits changed outside the daemon, set again (%s%s%s%s)",
+        core_log(5, "charger bits changed outside the daemon, set again (%s%s%s%s%s)",
                  rc & BQ_FIX_REG0F ? " REG0F" : "", rc & BQ_FIX_REG12 ? " REG12" : "",
-                 rc & BQ_FIX_REG14 ? " REG14" : "", rc & BQ_FIX_REG2E ? " REG2E" : "");
+                 rc & BQ_FIX_REG14 ? " REG14" : "", rc & BQ_FIX_REG2E ? " REG2E" : "",
+                 rc & BQ_FIX_VREG ? " VREG" : "");
         c->last_fix_log = now;
     }
     return 0;
@@ -221,8 +235,8 @@ static void low_battery(struct core *c)
 // results, then with a doubling wait up to CORE_RECOVER_MAX_S. Results
 // fresh for CORE_RECOVER_OK_S start the backoff over. REG0F is never
 // written by the recovery, so EN_CHG stays as the policy has it and the
-// chip's own OVP keeps the converter off. VREG, ICHG and the limits are
-// never written.
+// chip's own OVP keeps the converter off. The start-up writes include VREG
+// (charge_voltage_v) when it differs. ICHG and the limits are never written.
 static int recover_due(struct core *c, double now)
 {
     if (c->valid)
@@ -270,6 +284,13 @@ static void recover_start(struct core *c, double now)
     c->recover_phase = 1;
     c->applied_valid = 0;           // the next enforce() is not an outside change
     c->last_kick = now;
+}
+
+static void log_partial(const struct core *c, const char *what)
+{
+    core_log(6, "partial cycle%s: %.1f %% deep, %.2f Wh, weight %.2f, partial capacity %.2f Wh "
+             "from %d cycles (low precision)", what, c->tel.part_depth, c->tel.part_est,
+             c->tel.part_weight, c->tel.part_wh, c->tel.part_n);
 }
 
 void core_poll(struct core *c, double now, double wall)
@@ -345,6 +366,10 @@ void core_poll(struct core *c, double now, double wall)
         int reused = tel_restore(&c->tel, &c->saved, c->m.vbat);
         core_log(6, "state file: learned %.2f Wh, counter %s", c->tel.cap_wh,
                  reused ? "reused" : "dropped (voltage disagrees or no anchor)");
+        if (c->tel.learned)
+            core_log(6, "capacity learned: %.2f Wh (%.0f %% of rated)", c->tel.cap_wh, tel_soh(&c->tel));
+        if (c->tel.learned_partial)
+            log_partial(c, " (segment of the last run)");
         save_state(c, now, wall, 0);
     }
 
@@ -385,9 +410,7 @@ void core_poll(struct core *c, double now, double wall)
         if (c->tel.learned)
             core_log(6, "capacity learned: %.2f Wh (%.0f %% of rated)", c->tel.cap_wh, tel_soh(&c->tel));
         if (c->tel.learned_partial)
-            core_log(6, "partial cycle: %.1f %% deep, %.2f Wh, weight %.2f, partial capacity %.2f Wh "
-                     "from %d cycles (low precision)", c->tel.part_depth, c->tel.part_est,
-                     c->tel.part_weight, c->tel.part_wh, c->tel.part_n);
+            log_partial(c, "");
         if (c->tel.cycle_ready)
         {
             rc = store_append_cycle(c->cfg.state_dir, &c->tel.cycle);
