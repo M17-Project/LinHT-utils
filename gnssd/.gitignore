@@ -1,0 +1,3 @@
+linht-gnssd
+tests/run-tests
+tests/run-tests-asan
