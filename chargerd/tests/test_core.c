@@ -511,11 +511,11 @@ static void charge_voltage(void)
     c.cfg.charge_voltage_v = 8.30;              // the default
     CHECK(core_init(&c, now) == 0);
     CHECK(f.r[BQ_REG_VREG] == 0x03 && f.r[BQ_REG_VREG + 1] == 0x3e);   // 830 x 10 mV
-    CHECK(f.writes[BQ_REG_VREG] == 0);          // the high byte stays
-    CHECK(f.writes[BQ_REG_VREG + 1] == 1);
+    CHECK(f.writes[BQ_REG_VREG] == 1 && f.writes[BQ_REG_VREG + 1] == 1);  // one transfer
     poll_for(3);
     CHECK_NEAR(c.m.vreg, 8.30, 1e-9);
     CHECK(f.writes[BQ_REG_VREG + 1] == 1);      // no rewrite while it holds
+    CHECK(f.ignored_writes == 0);
     CHECK(only_allowed_writes());
     CHECK_NEAR(c.pol.end_vbat, 7.32, 0.005);    // 20 % of the 8.30 V table
     CHECK_NEAR(c.pol.min_vbat, 7.42, 0.005);
@@ -568,6 +568,7 @@ static void charge_voltage(void)
     poll_for(1);
     CHECK(f.r[BQ_REG_VREG] == 0x03 && f.r[BQ_REG_VREG + 1] == 0x3e);
     CHECK(only_allowed_writes());
+    CHECK(f.ignored_writes == 0);
     f.adc_frozen = 0;
 }
 

@@ -62,7 +62,28 @@ static int wr(void *ctx, uint8_t reg, uint8_t val)
     }
     if (reg == BQ_REG_CTRL0 && (val & BQ_EN_HIZ) && !(f->r[reg] & BQ_EN_HIZ))
         f->r[BQ_REG_ADC] &= (uint8_t)~BQ_ADC_EN;  // HIZ entry turns the ADC off
+    // The 16 bit VREG takes only a two byte write (seen on Rev C).
+    if (reg == BQ_REG_VREG || reg == BQ_REG_VREG + 1)
+    {
+        f->ignored_writes++;
+        return 0;
+    }
     f->r[reg] = val;
+    return 0;
+}
+
+static int wr2(void *ctx, uint8_t reg, uint8_t hi, uint8_t lo)
+{
+    struct fake_chip *f = ctx;
+    if (f->fail)
+        return -EIO;
+    if (reg + 2 > BQ_NREGS)
+        return -EINVAL;
+    watchdog(f);
+    f->writes[reg]++;
+    f->writes[reg + 1]++;
+    f->r[reg] = hi;
+    f->r[reg + 1] = lo;
     return 0;
 }
 
@@ -83,6 +104,7 @@ void fake_init(struct fake_chip *f, struct bq_io *io)
     memset(io, 0, sizeof(*io));
     io->read = rd;
     io->write = wr;
+    io->write2 = wr2;
     io->ctx = f;
     io->fd = -1;
 }
