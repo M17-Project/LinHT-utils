@@ -273,12 +273,10 @@ static void end_of_charge(void)
     poll_ovp(10);
     CHECK(!c.valid);
     CHECK(c.pol.state == ST_FULL);              // not "fault"
-    CHECK(c.pol.block == BLK_FAULT);            // quiet still refused
+    CHECK(c.pol.block == BLK_NONE);             // quiet is granted
     const char *names[4];
     CHECK(core_faults(&c, names, 4) == 1 && !strcmp(names[0], "vbat-ovp"));
     CHECK(c.tel.anchored == anchors);           // no SoC anchor from the OVP
-    unsigned g;
-    CHECK(policy_quiet(&c.pol, ":1.20", 60, now, &g) == PERR_FAULT);
 
     // First attempt after 60 s of stale results.
     unsigned w2e = f.writes[BQ_REG_ADC];
@@ -365,6 +363,46 @@ static void ovp_charging_off(void)
     f.adc_frozen = 0;
 }
 
+// A quiet lease during VBAT_OVP at the end of charge: granted, HIZ on, no
+// recovery while it is held, the 60 s start again when it ends.
+static void ovp_full_quiet(void)
+{
+    unsigned g;
+    setup();
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.44, 0.23);
+    f.r[BQ_REG_STAT1] = 4 << 5;
+    poll_for(10);
+    ovp_start();
+    poll_ovp(10);
+    CHECK(c.pol.state == ST_FULL && c.pol.block == BLK_NONE);
+    CHECK(policy_quiet(&c.pol, ":1.20", 120, now, &g) == PERR_OK && g == 120);
+    core_apply(&c, now);
+    CHECK(f.r[BQ_REG_CTRL0] & BQ_EN_HIZ);
+    CHECK(c.pol.state == ST_QUIET);
+    unsigned n = c.recoveries;
+    poll_ovp(119);
+    CHECK(c.pol.state == ST_QUIET && (f.r[BQ_REG_CTRL0] & BQ_EN_HIZ));
+    CHECK(c.recoveries == n);
+    poll_ovp(1);                                // the lease ends
+    CHECK(c.pol.state == ST_FULL && !(f.r[BQ_REG_CTRL0] & BQ_EN_HIZ));
+    CHECK(until_recovery(59) < 0);
+    CHECK(until_recovery(5) > 0);
+    CHECK(only_allowed_writes());
+
+    // The OVP ends during the lease: the lease stays.
+    CHECK(policy_quiet(&c.pol, ":1.20", 60, now, &g) == PERR_OK);
+    core_apply(&c, now);
+    poll_ovp(5);
+    ovp_end();
+    poll_for(15);
+    CHECK(c.pol.state == ST_QUIET && c.pol.nlease == 1);
+    CHECK(policy_quiet(&c.pol, ":1.20", 0, now, &g) == PERR_OK);
+    f.adc_frozen = 0;
+    poll_for(2);
+    CHECK(!(f.r[BQ_REG_CTRL0] & BQ_EN_HIZ));
+}
+
 // HIZ turns the ADC off by design: no recovery during a quiet lease, and
 // the 60 s start again when the lease ends.
 static void stale_in_quiet(void)
@@ -420,7 +458,9 @@ static void ovp_is_fault(void)
     poll_for(5);
     ovp_start();
     poll_ovp(3);
-    CHECK(c.pol.state == ST_FAULT);
+    CHECK(c.pol.state == ST_FAULT && c.pol.block == BLK_FAULT);
+    unsigned g;
+    CHECK(policy_quiet(&c.pol, ":1.21", 60, now, &g) == PERR_FAULT);
     ovp_end();
 
     // Far below VREG.
@@ -442,6 +482,7 @@ static void ovp_is_fault(void)
     f.r[BQ_REG_FAULT1] = 0x04;                  // thermal shutdown
     poll_ovp(3);
     CHECK(c.pol.state == ST_FAULT);
+    CHECK(policy_quiet(&c.pol, ":1.21", 60, now, &g) == PERR_FAULT);
     f.r[BQ_REG_FAULT1] = 0;
     ovp_end();
 
@@ -514,6 +555,7 @@ void test_core(void)
     stale();
     end_of_charge();
     ovp_charging_off();
+    ovp_full_quiet();
     stale_in_quiet();
     ovp_is_fault();
     cycle_log();

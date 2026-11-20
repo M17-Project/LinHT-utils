@@ -74,11 +74,28 @@ static int below_end(const struct policy *p, const struct policy_in *in)
     return in->vbat < p->cfg->quiet_end_vbat;
 }
 
+// On USB: below the end limit all leases end and new ones stay refused
+// until the SoC is back at quiet_resume_soc.
+static void low_limits(struct policy *p, const struct policy_in *in)
+{
+    if (below_end(p, in))
+    {
+        if (p->nlease)
+            p->low_block = 1;
+        end_all(p);
+        p->holding = 0;
+    }
+    if (p->low_block && !isnan(in->soc) && in->soc >= p->cfg->quiet_resume_soc)
+        p->low_block = 0;
+}
+
 static enum pblock blocked(const struct policy *p, const struct policy_in *in)
 {
     if (!in->chip_ok)
         return BLK_CHIP;
-    if (in->fault)
+    // VBAT_OVP at the end of charge does not block quiet: HIZ stops the
+    // charging, the safest thing during that OVP.
+    if (in->fault && !in->ovp_full)
         return BLK_FAULT;
     // The battery limits apply only on USB. On battery quiet is free.
     if (in->usb && (p->low_block || below_min(p, in)))
@@ -204,16 +221,30 @@ void policy_step(struct policy *p, const struct policy_in *in)
         return;
     }
 
-    if (in->fault)
+    if (in->fault && !in->ovp_full)
     {
         end_all(p);
         p->holding = 0;
-        // VBAT_OVP right at the end of charge says "full", the fault stays
-        // in Faults and quiet stays refused. No full anchor here.
-        p->state = in->ovp_full ? ST_FULL : ST_FAULT;
+        p->state = ST_FAULT;
         p->block = BLK_FAULT;
         p->want_hiz = 0;
         p->want_chg = p->charging_enabled;
+        return;
+    }
+
+    if (in->fault)
+    {
+        // VBAT_OVP right at the end of charge says "full", the fault stays
+        // in Faults. No full anchor and no full-hold here. Quiet leases are
+        // kept and granted (HIZ stops the charging), the battery limits of
+        // the leases still apply on USB.
+        p->holding = 0;
+        if (in->usb)
+            low_limits(p, in);
+        p->block = blocked(p, in);
+        p->want_chg = p->charging_enabled;
+        p->state = p->nlease > 0 ? ST_QUIET : ST_FULL;
+        p->want_hiz = p->nlease > 0;
         return;
     }
 
@@ -231,15 +262,7 @@ void policy_step(struct policy *p, const struct policy_in *in)
     }
 
     // On USB: the low battery limits.
-    if (below_end(p, in))
-    {
-        if (p->nlease)
-            p->low_block = 1;
-        end_all(p);
-        p->holding = 0;
-    }
-    if (p->low_block && !isnan(in->soc) && in->soc >= cfg->quiet_resume_soc)
-        p->low_block = 0;
+    low_limits(p, in);
     p->block = blocked(p, in);
 
     // The full latch is updated only while the converter charges.

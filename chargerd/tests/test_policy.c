@@ -157,19 +157,46 @@ static void fault_and_chip(void)
     step(2);
     CHECK(p.state == ST_CHARGING);
 
-    // VBAT_OVP at the end of charge: "full", still blocked, no anchor, and
-    // EN_CHG as SetCharging has it.
+    // VBAT_OVP at the end of charge: "full", no anchor, EN_CHG as
+    // SetCharging has it. Quiet is not blocked: a lease is kept and new
+    // ones are granted, HIZ stops the charging.
     CHECK(policy_quiet(&p, ":1.53", 300, 2, &g) == PERR_OK);
     in.fault = in.ovp_full = 1;
     step(2.5);
+    CHECK(p.state == ST_QUIET && p.want_hiz && p.nlease == 1);
+    CHECK(p.block == BLK_NONE && !p.full && !p.full_event);
+    CHECK(policy_release(&p, ":1.53") == 1);
+    step(2.55);
     CHECK(p.state == ST_FULL && !p.full && !p.full_event && p.nlease == 0);
-    CHECK(p.block == BLK_FAULT && !p.want_hiz && p.want_chg);
-    CHECK(policy_quiet(&p, ":1.53", 300, 2.5, &g) == PERR_FAULT);
+    CHECK(p.block == BLK_NONE && !p.want_hiz && p.want_chg);
+    CHECK(policy_quiet(&p, ":1.53", 300, 2.55, &g) == PERR_OK && g == 300);
+    step(2.56);
+    CHECK(p.state == ST_QUIET && p.want_hiz);
+    CHECK(policy_release(&p, ":1.53") == 1);
     policy_set_charging(&p, 0);
     step(2.6);
-    CHECK(p.state == ST_FULL && !p.want_chg);
+    CHECK(p.state == ST_FULL && !p.want_chg && !p.want_hiz);
     policy_set_charging(&p, 1);
-    in.fault = in.ovp_full = 0;
+
+    // The battery limits of the leases still apply during that OVP.
+    CHECK(policy_quiet(&p, ":1.54", 300, 2.6, &g) == PERR_OK);
+    in.soc = cfg.quiet_end_soc - 1;
+    step(2.62);
+    CHECK(p.state == ST_FULL && p.nlease == 0 && !p.want_hiz);
+    CHECK(p.block == BLK_LOW_BATTERY);
+    CHECK(policy_quiet(&p, ":1.54", 300, 2.62, &g) == PERR_LOW_BATTERY);
+    in.soc = cfg.quiet_resume_soc;
+    step(2.64);
+    CHECK(p.block == BLK_NONE);
+    in.soc = 60;
+
+    // Any other fault stays blocked, and a lease ends.
+    CHECK(policy_quiet(&p, ":1.55", 300, 2.64, &g) == PERR_OK);
+    in.ovp_full = 0;
+    step(2.66);
+    CHECK(p.state == ST_FAULT && p.nlease == 0 && !p.want_hiz && p.block == BLK_FAULT);
+    CHECK(policy_quiet(&p, ":1.55", 300, 2.66, &g) == PERR_FAULT);
+    in.fault = 0;
     step(2.7);
     CHECK(p.state == ST_CHARGING && !p.full);
 
