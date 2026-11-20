@@ -64,6 +64,15 @@ Rev B will not be produced again. A Rev B unit can set `pfm = on` in its
 local `/etc/linht/chargerd.conf`. The file is a `CONFFILES` entry, so a
 local change survives package updates.
 
+## linht-gnssd
+
+`linht-gnssd_git.bb` is the same kind of recipe for the `gnssd/`
+directory, for `meta-linht-software/recipes-support/linht-gnssd/`. Add
+`linht-gnssd` to `IMAGE_INSTALL` next to `linht-chargerd`. The service is
+installed but not enabled (`SYSTEMD_AUTO_ENABLE = "disable"`) while the FART
+field logger still opens `/dev/ttyLP2` itself. The daemon would take the
+tty lock first and the logger would lose its GNSS data.
+
 ## Alternative: inside linht-utils.bb
 
 If one recipe is preferred, these lines go into `linht-utils.bb`:
