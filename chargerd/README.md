@@ -92,7 +92,10 @@ Lease rules:
 - On battery a lease is granted and costs nothing.
 - On USB a lease is refused below `quiet_min_soc`. All leases end below
   `quiet_end_soc`, and new ones are refused until `quiet_resume_soc`.
-- A charger fault ends all leases and refuses new ones.
+- A charger fault ends all leases and refuses new ones. The one exception
+  is VBAT_OVP at the end of charge (see below): leases are kept and granted,
+  because HIZ stops the charging, the safest thing during that OVP. The
+  battery limits above still apply.
 
 ### Properties
 
@@ -213,7 +216,7 @@ States, in priority order:
 | State | When | Charger |
 |---|---|---|
 | `chip-error` | 3 failed polls in a row | nothing possible, retry every 5 s, leases kept |
-| `fault` | REG20 or REG21 fault, or a fault flag in the last 10 s. VBAT_OVP at the end of charge is shown as `full`, see below | HIZ off, quiet refused |
+| `fault` | REG20 or REG21 fault, or a fault flag in the last 10 s. VBAT_OVP at the end of charge is shown as `full` or `quiet`, see below | HIZ off, quiet refused |
 | `on-battery` | no USB power good | nothing to switch |
 | `quiet` | USB and at least one lease | EN_HIZ = 1 |
 | `full-hold` | USB, battery full, `full_hold = on` | EN_HIZ = 1 until the SoC is below `full_hold_resume_soc` |
@@ -259,8 +262,11 @@ flag), VBUS is present, VREG is not above 4.2 V per cell, and the last fresh
 VBAT was between VREG minus 0.05 V and 101 % of VREG (the lowest OVP release
 level of the data sheet, 8.48 V at 8.40 V). The battery is then at the end
 of its charge and the charger only stopped early. `Faults` still lists
-`vbat-ovp`, `QuietBlockedReason` stays `fault` and quiet is refused. The
-SoC is not anchored at 100 %, because the charge did not terminate (the
+`vbat-ovp`, but quiet is not blocked: a lease puts the charger in HIZ, which
+stops the charging and is the safest state during this OVP. State is then
+`quiet`, `QuietBlockedReason` is empty, and the limits of `quiet_min_soc`
+and `quiet_end_soc` apply as usual. As in every HIZ there is no ADC
+recovery during the lease. The SoC is not anchored at 100 %, because the charge did not terminate (the
 current was above the 0.2 A of the `full` rule) and the frozen results
 cannot show the true end. Any other VBAT_OVP, for example with a fresh VBAT
 above 101 % of VREG, stays `fault`.
