@@ -10,7 +10,7 @@
 
 #define BQ_NREGS 0x49           // REG00 to REG48
 
-#define BQ_REG_VREG     0x01    // 16 bit, 10 mV per bit
+#define BQ_REG_VREG     0x01    // 16 bit, 10 mV per bit, bits 10:0 (REG01 2:0, REG02)
 #define BQ_REG_CTRL_A   0x0a    // CELL in bits 7:6
 #define BQ_REG_CTRL0    0x0f    // EN_CHG, EN_HIZ
 #define BQ_REG_CTRL1    0x10    // WD_RST, WATCHDOG
@@ -91,6 +91,7 @@ struct bq_want
     int hiz;
     int chg;
     int pfm;
+    int vreg_10mv;              // VREG in 10 mV steps, 0 leaves it as it is
 };
 
 // Bits of the bq_enforce() result: which registers were rewritten.
@@ -98,6 +99,7 @@ struct bq_want
 #define BQ_FIX_REG12 2
 #define BQ_FIX_REG14 4
 #define BQ_FIX_REG2E 8
+#define BQ_FIX_VREG  16
 
 // Opens the I2C device, takes flock(LOCK_EX | LOCK_NB) on it and sets the
 // slave address without I2C_SLAVE_FORCE (EBUSY if a kernel driver is bound).
@@ -112,7 +114,7 @@ void bq_decode(const uint8_t regs[BQ_NREGS], struct bq_meas *m);
 int bq_update(struct bq_io *io, uint8_t reg, uint8_t mask, uint8_t val, int force);
 
 // Compares the snapshot with what is wanted and rewrites REG0F, REG12,
-// REG14 and REG2E where they differ. The snapshot is updated with the
+// REG14, REG2E and VREG (REG01, REG02) where they differ. The snapshot is updated with the
 // written values. Returns the BQ_FIX_* bits or a negative errno.
 int bq_enforce(struct bq_io *io, uint8_t regs[BQ_NREGS], const struct bq_want *w);
 

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "policy.h"
+#include "telemetry.h"
 
 #define FULL_VREG_MARGIN 0.05   // V below VREG, second full rule
 #define FULL_IBAT_MAX    0.2    // A
@@ -11,6 +12,7 @@
 #define UNFULL_IBAT      0.3    // A, charging again
 #define UNFULL_VREG      0.15   // V below VREG
 #define UNFULL_HOLD_S    10.0   // s
+#define QUIET_VBAT_HYST  0.10   // V, auto start limit above the end limit
 
 void policy_init(struct policy *p, const struct chargerd_config *cfg)
 {
@@ -24,6 +26,9 @@ void policy_init(struct policy *p, const struct chargerd_config *cfg)
     p->last.soc = NAN;
     p->last.vbat = NAN;
     p->last.chip_ok = 1;
+    p->end_vbat = isnan(cfg->quiet_end_vbat) ? tel_ocv_voltage(cfg, cfg->quiet_end_soc)
+                                             : cfg->quiet_end_vbat;
+    p->min_vbat = isnan(cfg->quiet_min_vbat) ? p->end_vbat + QUIET_VBAT_HYST : cfg->quiet_min_vbat;
 }
 
 static int find(const struct policy *p, const char *owner)
@@ -64,14 +69,14 @@ static int below_min(const struct policy *p, const struct policy_in *in)
 {
     if (in->soc_trusted && !isnan(in->soc))
         return in->soc < p->cfg->quiet_min_soc;
-    return in->vbat < p->cfg->quiet_min_vbat;
+    return in->vbat < p->min_vbat;
 }
 
 static int below_end(const struct policy *p, const struct policy_in *in)
 {
     if (in->soc_trusted && !isnan(in->soc))
         return in->soc < p->cfg->quiet_end_soc;
-    return in->vbat < p->cfg->quiet_end_vbat;
+    return in->vbat < p->end_vbat;
 }
 
 // On USB: below the end limit all leases end and new ones stay refused

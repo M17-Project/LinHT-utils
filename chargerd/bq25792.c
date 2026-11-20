@@ -158,6 +158,20 @@ int bq_enforce(struct bq_io *io, uint8_t regs[BQ_NREGS], const struct bq_want *w
         return rc;
     done |= rc ? BQ_FIX_REG2E : 0;
 
+    // Charge voltage. High byte first, the reserved bits 7:3 of REG01 stay.
+    // Between 8.00 and 8.40 V (0x320 to 0x348) only REG02 changes.
+    if (w->vreg_10mv > 0)
+    {
+        int rc2;
+        rc = fix(io, regs, BQ_REG_VREG, 0x07, (uint8_t)((w->vreg_10mv >> 8) & 0x07));
+        if (rc < 0)
+            return rc;
+        rc2 = fix(io, regs, BQ_REG_VREG + 1, 0xff, (uint8_t)(w->vreg_10mv & 0xff));
+        if (rc2 < 0)
+            return rc2;
+        done |= rc || rc2 ? BQ_FIX_VREG : 0;
+    }
+
     return done;
 }
 

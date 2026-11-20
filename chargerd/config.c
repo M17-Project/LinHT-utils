@@ -1,5 +1,6 @@
 // linht-chargerd: configuration file
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,12 +23,13 @@ void config_defaults(struct chargerd_config *c)
     c->quiet_min_soc = 25.0;
     c->quiet_end_soc = 20.0;
     c->quiet_resume_soc = 40.0;
-    c->quiet_min_vbat = 7.45;
-    c->quiet_end_vbat = 7.35;
+    c->quiet_min_vbat = NAN;        // auto
+    c->quiet_end_vbat = NAN;
     c->low_soc = 15.0;
     c->critical_soc = 5.0;
     snprintf(c->battery, sizeof(c->battery), "Retevis C62 2S Li-ion");
     c->cells = 2;
+    c->charge_voltage_v = 8.30;     // 4.15 V per cell
     c->capacity_rated_wh = 14.8;
     c->capacity_rated_mah = 2000.0;
 }
@@ -54,7 +56,7 @@ static const struct key keys[] = {
     U(quiet_max_s), D(quiet_min_soc), D(quiet_end_soc), D(quiet_resume_soc),
     D(quiet_min_vbat), D(quiet_end_vbat),
     D(low_soc), D(critical_soc),
-    S(battery), I(cells), D(capacity_rated_wh), D(capacity_rated_mah),
+    S(battery), I(cells), D(charge_voltage_v), D(capacity_rated_wh), D(capacity_rated_mah),
 };
 
 static char *trim(char *s)
@@ -86,6 +88,11 @@ static int set_value(struct chargerd_config *c, const struct key *k, const char 
         *(unsigned *)p = (unsigned)strtoul(v, &end, 0);
         return *end ? -1 : 0;
     case K_DBL:
+        if (!strcasecmp(v, "auto"))
+        {
+            *(double *)p = NAN;
+            return 0;
+        }
         *(double *)p = strtod(v, &end);
         return *end ? -1 : 0;
     case K_BOOL:
@@ -137,5 +144,14 @@ int config_load(struct chargerd_config *c, const char *path)
         }
     }
     fclose(f);
+
+    int cells = c->cells > 0 ? c->cells : 2;
+    double v = c->charge_voltage_v;
+    if (!(v >= cells * CONFIG_VCELL_MIN - 0.0005 && v <= cells * CONFIG_VCELL_MAX + 0.0005))
+    {
+        fprintf(stderr, "<3>%s: charge_voltage_v %.3f is outside %.2f to %.2f V for %dS\n", path, v,
+                cells * CONFIG_VCELL_MIN, cells * CONFIG_VCELL_MAX, cells);
+        rc = -1;
+    }
     return rc;
 }

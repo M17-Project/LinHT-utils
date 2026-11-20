@@ -13,6 +13,9 @@
 
 enum tel_kind { TEL_NONE, TEL_DISCHARGE, TEL_CHARGE };
 
+// Partial cycle segment: no start rest point yet, or counting from one.
+enum tel_part { TEL_PART_IDLE, TEL_PART_COUNT };
+
 struct tel_in
 {
     double now;                 // monotonic s
@@ -51,6 +54,10 @@ struct tel_saved
     int clean_stop;
     double part_wh, part_w;     // partial cycle estimate and its weight
     int part_n;                 // partial cycles used
+    // Partial segment in progress: the start and the last rest point.
+    int part_active;
+    double part_socv0, part_socv1, part_i0, part_i1;
+    double part_e1, part_q1, part_t1;
 };
 
 struct telemetry
@@ -79,9 +86,12 @@ struct telemetry
     // Partial cycle learning, low precision (see tel_capacity_wh).
     double part_wh, part_w;     // estimate, sum of the decayed weights
     int part_n;                 // discharge segments used
-    int part_state;             // PART_IDLE, PART_SETTLE, PART_COUNT
-    double part_t, part_e, part_q;      // s, Wh out, Ah out since counting
-    double part_socv0, part_socv;       // voltage SoC at start and last
+    int part_state;             // enum tel_part
+    double rest_t;              // s discharging without charge current
+    double part_t, part_e, part_q;      // s, Wh out, Ah out since the start
+    double part_socv0, part_i0;         // voltage SoC and load at the start
+    double part_socv, part_i1;          // the same at the last rest point
+    double part_t1, part_e1, part_q1;   // s, Wh, Ah up to the last rest point
     double part_est, part_weight, part_depth;   // last segment used
 
     int seg_kind;
@@ -105,9 +115,14 @@ void tel_sample(struct telemetry *t, const struct tel_in *in);
 double tel_avg_power(const struct telemetry *t, unsigned window);
 double tel_avg_current(const struct telemetry *t, unsigned window);
 
+// SoC by the open circuit voltage table. 100 % is the configured charge
+// voltage (charge_voltage_v), so the table follows VREG.
 double tel_soc_from_voltage(const struct telemetry *t, double vbat);
 // Inverse of the table: pack open circuit voltage at a SoC.
 double tel_voltage_from_soc(const struct telemetry *t, double soc);
+// The same without a telemetry, for the policy limits.
+double tel_ocv_soc(const struct chargerd_config *cfg, double vbat);
+double tel_ocv_voltage(const struct chargerd_config *cfg, double soc);
 double tel_energy_remaining(const struct telemetry *t);
 double tel_soh(const struct telemetry *t);
 double tel_equivalent_cycles(const struct telemetry *t);
@@ -125,7 +140,8 @@ unsigned long long tel_since(double since, double now);
 
 void tel_save(const struct telemetry *t, struct tel_saved *s);
 // vbat: present voltage, for the 15 % agreement check. Returns 1 when the
-// saved counter was reused, 0 when it was dropped.
+// saved counter was reused, 0 when it was dropped. A saved partial segment
+// is evaluated with its last rest point (learned_partial is then set).
 int tel_restore(struct telemetry *t, const struct tel_saved *s, double vbat);
 
 #endif

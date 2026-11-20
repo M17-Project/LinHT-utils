@@ -1,6 +1,7 @@
 // linht-chargerd tests: the poll against a fake chip (register logic,
 // watchdog, quiet, USB plug events, chip errors, stop)
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,7 @@ static void setup(void)
 {
     memset(&c, 0, sizeof(c));
     config_defaults(&c.cfg);
+    c.cfg.charge_voltage_v = 8.40;              // the Rev C numbers below
     snprintf(c.cfg.state_dir, sizeof(c.cfg.state_dir), "%s", dir);
     fake_init(&f, &c.io);
     now = 100;
@@ -41,7 +43,7 @@ static int only_allowed_writes(void)
 {
     for (int r = 0; r < BQ_NREGS; r++)
         if (f.writes[r] && r != BQ_REG_CTRL0 && r != BQ_REG_CTRL1 && r != BQ_REG_CTRL3 &&
-            r != BQ_REG_CTRL5 && r != BQ_REG_ADC)
+            r != BQ_REG_CTRL5 && r != BQ_REG_ADC && r != BQ_REG_VREG && r != BQ_REG_VREG + 1)
             return 0;
     return 1;
 }
@@ -500,6 +502,104 @@ static void ovp_is_fault(void)
     f.adc_frozen = 0;
 }
 
+// charge_voltage_v: written at start, set again when it differs, read back
+// as VREG, and the full rule, the OVP at full and the quiet voltage limits
+// follow it.
+static void charge_voltage(void)
+{
+    setup();
+    c.cfg.charge_voltage_v = 8.30;              // the default
+    CHECK(core_init(&c, now) == 0);
+    CHECK(f.r[BQ_REG_VREG] == 0x03 && f.r[BQ_REG_VREG + 1] == 0x3e);   // 830 x 10 mV
+    CHECK(f.writes[BQ_REG_VREG] == 0);          // the high byte stays
+    CHECK(f.writes[BQ_REG_VREG + 1] == 1);
+    poll_for(3);
+    CHECK_NEAR(c.m.vreg, 8.30, 1e-9);
+    CHECK(f.writes[BQ_REG_VREG + 1] == 1);      // no rewrite while it holds
+    CHECK(only_allowed_writes());
+    CHECK_NEAR(c.pol.end_vbat, 7.32, 0.005);    // 20 % of the 8.30 V table
+    CHECK_NEAR(c.pol.min_vbat, 7.42, 0.005);
+
+    // A reset of VREG (REG_RST, a power on reset of the charger): set again.
+    fake_set16(&f, BQ_REG_VREG, 840);
+    poll_for(2);
+    CHECK(f.r[BQ_REG_VREG + 1] == 0x3e);
+    CHECK_NEAR(c.m.vreg, 8.30, 1e-9);
+
+    // Full by the second rule near 8.30 V, which is below 8.40 - 0.05 V.
+    fake_adc(&f, 8.27, 0.1);
+    poll_for(70);
+    CHECK(c.pol.state == ST_FULL && c.tel.anchored);
+    CHECK_NEAR(c.tel.soc, 100, 1e-9);
+
+    // VBAT_OVP at 8.33 V is at the end of charge for 8.30 V (8.25 to 8.383 V).
+    setup();
+    c.cfg.charge_voltage_v = 8.30;
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.33, 0.23);
+    f.r[BQ_REG_STAT1] = 4 << 5;
+    poll_for(10);
+    ovp_start();
+    poll_ovp(10);
+    CHECK(c.pol.state == ST_FULL && c.pol.block == BLK_NONE);
+    ovp_end();
+    f.adc_frozen = 0;
+    poll_for(15);
+
+    // The same OVP at 8.40 V is above 101 % of 8.30 V: a fault.
+    setup();
+    c.cfg.charge_voltage_v = 8.30;
+    CHECK(core_init(&c, now) == 0);
+    fake_adc(&f, 8.40, 0.23);
+    f.r[BQ_REG_STAT1] = 4 << 5;
+    poll_for(10);
+    ovp_start();
+    poll_ovp(10);
+    CHECK(c.pol.state == ST_FAULT && c.pol.block == BLK_FAULT);
+
+    // VREG lost with the ADC stopped: set again at the next poll, and the
+    // recovery of the ADC keeps it.
+    ovp_end();
+    f.r[BQ_REG_STAT1] = 3 << 5;
+    fake_set16(&f, BQ_REG_VREG, 840);
+    poll_for(1);
+    CHECK(f.r[BQ_REG_VREG + 1] == 0x3e);
+    CHECK(until_recovery(120) > 0);
+    poll_for(1);
+    CHECK(f.r[BQ_REG_VREG] == 0x03 && f.r[BQ_REG_VREG + 1] == 0x3e);
+    CHECK(only_allowed_writes());
+    f.adc_frozen = 0;
+}
+
+// A partial segment in progress survives the state file.
+static void store_partial(void)
+{
+    struct tel_saved a, b;
+    memset(&a, 0, sizeof(a));
+    a.cap_wh = 14.8;
+    a.part_active = 1;
+    a.part_socv0 = 88.5;
+    a.part_socv1 = 31.25;
+    a.part_i0 = 0.16;
+    a.part_i1 = 0.17;
+    a.part_e1 = 6.75;
+    a.part_q1 = 0.875;
+    a.part_t1 = 9000;
+    CHECK(store_save(dir, &a) == 0);
+    CHECK(store_load(dir, &b) == 0);
+    CHECK(b.part_active == 1);
+    CHECK_NEAR(b.part_socv0, 88.5, 1e-6);
+    CHECK_NEAR(b.part_socv1, 31.25, 1e-6);
+    CHECK_NEAR(b.part_i1, 0.17, 1e-6);
+    CHECK_NEAR(b.part_e1, 6.75, 1e-6);
+    CHECK_NEAR(b.part_q1, 0.875, 1e-6);
+    CHECK_NEAR(b.part_t1, 9000, 1e-6);
+    a.part_active = 0;
+    CHECK(store_save(dir, &a) == 0);
+    CHECK(store_load(dir, &b) == 0);
+    CHECK(b.part_active == 0);
+}
+
 static void cycle_log(void)
 {
     struct tel_cycle cy;
@@ -536,6 +636,34 @@ static void config_file(void)
     CHECK(config_load(&b, "chargerd.conf") == 0);
     CHECK(!memcmp(&a, &b, sizeof(a)));
     CHECK(config_load(&b, "/nonexistent/chargerd.conf") == 1);
+    CHECK(isnan(a.quiet_min_vbat) && isnan(a.quiet_end_vbat));     // auto
+    CHECK_NEAR(a.charge_voltage_v, 8.30, 1e-9);
+
+    // The charge voltage must be 4.00 to 4.20 V per cell.
+    char file[300];
+    snprintf(file, sizeof(file), "%s/test.conf", dir);
+    const char *const bad[] = { "charge_voltage_v = 8.45\n", "charge_voltage_v = 7.9\n",
+                                "charge_voltage_v = auto\n", "cells = 3\ncharge_voltage_v = 8.3\n" };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+    {
+        FILE *fp = fopen(file, "w");
+        fputs(bad[i], fp);
+        fclose(fp);
+        config_defaults(&b);
+        CHECK(config_load(&b, file) == -1);
+    }
+    FILE *fp = fopen(file, "w");
+    fputs("charge_voltage_v = 8.0\nquiet_end_vbat = 7.2\nquiet_min_vbat = auto\n", fp);
+    fclose(fp);
+    config_defaults(&b);
+    CHECK(config_load(&b, file) == 0);
+    CHECK_NEAR(b.charge_voltage_v, 8.0, 1e-9);
+    CHECK_NEAR(b.quiet_end_vbat, 7.2, 1e-9);
+    CHECK(isnan(b.quiet_min_vbat));
+    struct policy p;
+    policy_init(&p, &b);
+    CHECK_NEAR(p.end_vbat, 7.2, 1e-9);
+    CHECK_NEAR(p.min_vbat, 7.3, 1e-9);
 }
 
 void test_core(void)
@@ -558,6 +686,8 @@ void test_core(void)
     ovp_full_quiet();
     stale_in_quiet();
     ovp_is_fault();
+    charge_voltage();
+    store_partial();
     cycle_log();
     config_file();
 

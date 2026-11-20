@@ -12,9 +12,13 @@ static struct telemetry t;
 static struct tel_in in;
 static double now;
 
+// The checks with fixed numbers below use the plain table (100 % at
+// 4.20 V per cell), so VREG 8.40 V. vreg_table() and field_learning() run
+// at the default 8.30 V.
 static void setup(void)
 {
     config_defaults(&cfg);
+    cfg.charge_voltage_v = 8.40;
     tel_init(&t, &cfg);
     memset(&in, 0, sizeof(in));
     now = 1000;
@@ -306,7 +310,7 @@ static void partial_learning(void)
     in.charging = 1;
     bstep(cap, 0.0, 0, 0, 1.0);
     bstep(cap, 0.0, 0, 0, 1.0);
-    CHECK(t.part_state == 2);
+    CHECK(t.part_state == TEL_PART_COUNT);
     partial_cycle(cap, 50, bsoc, I_HIZ, 0, 0, 1.0);
     CHECK(t.part_n == 1 && t.part_depth > 15);
     CHECK_NEAR(t.part_est, cap, 0.05 * cap);
@@ -331,6 +335,180 @@ static void partial_learning(void)
     CHECK(t.part_n >= 3 && !isnan(tel_capacity_partial_wh(&t)));
 }
 
+// --- The voltage table follows the charge voltage ---
+
+static void vreg_table(void)
+{
+    setup();
+    cfg.charge_voltage_v = 8.30;                // the default
+    // 4.15 V per cell is 95 % of the plain table and becomes 100 %.
+    CHECK_NEAR(tel_soc_from_voltage(&t, 8.30), 100, 1e-9);
+    CHECK_NEAR(tel_soc_from_voltage(&t, 8.40), 100, 1e-9);
+    CHECK_NEAR(tel_soc_from_voltage(&t, 7.60), 50 / 0.95, 1e-6);
+    CHECK_NEAR(tel_soc_from_voltage(&t, 6.60), 0, 1e-9);
+    CHECK_NEAR(tel_voltage_from_soc(&t, 100), 8.30, 1e-9);
+    for (double soc = 0; soc <= 100; soc += 7)
+        CHECK_NEAR(tel_soc_from_voltage(&t, tel_voltage_from_soc(&t, soc)), soc, 1e-6);
+    cfg.charge_voltage_v = 8.40;
+    CHECK_NEAR(tel_soc_from_voltage(&t, 7.60), 50, 1e-9);
+    CHECK_NEAR(tel_voltage_from_soc(&t, 100), 8.40, 1e-9);
+
+    // The full anchored learning at 8.30 V: 10 h at 1.0 W = 10 Wh from full
+    // to 7.40 V, which is 25 / 0.95 = 26.3 % of the 8.30 V capacity:
+    // C_est = 10 / 0.737 = 13.57 Wh, C = 14.8 + 0.5 * 0.737 * (13.57 - 14.8).
+    setup();
+    cfg.charge_voltage_v = 8.30;
+    discharge(36000, 8.3, 7.4, -1.0);
+    double depth = 1 - 25 / 0.95 / 100;
+    CHECK(t.n70 == 1);
+    CHECK_NEAR(t.cap_wh, 14.8 + 0.5 * depth * (10.0 / depth - 14.8), 0.05);
+}
+
+// --- Field use on battery: rest point to rest point ---
+
+#define R_POL   0.05            // ohm, polarization that relaxes slowly
+#define TAU_POL 300.0           // s
+
+static double vpol;             // polarization voltage of the synthetic battery
+
+// One second on battery (or charging with charge set) at current i, with
+// the polarization of the cells. verr is the table error (V per pack).
+static void fstep(double cap, double i, double verr, int charge)
+{
+    vpol += (i * R_POL - vpol) / TAU_POL;
+    in.charging = charge;
+    in.discharging = !charge;
+    bstep(cap, i, verr, vpol, 1.0);
+}
+
+// Idle RX on battery for the given seconds.
+static void field_idle(double cap, int seconds, double verr)
+{
+    for (int k = 0; k < seconds; k++)
+        fstep(cap, -I_HIZ, verr, 0);
+}
+
+// Use in the field: RX with a 20 s TX at 1.5 A every 2 min.
+static void field_use(double cap, int seconds, double verr0, double verr1)
+{
+    for (int k = 0; k < seconds; k++)
+        fstep(cap, k % 120 < 20 ? -1.5 : -I_HIZ, verr0 + (verr1 - verr0) * k / seconds, 0);
+}
+
+// USB in: charge at 1 A for the given seconds.
+static void field_charge(double cap, int seconds)
+{
+    for (int k = 0; k < seconds; k++)
+        fstep(cap, 1.0, 0, 1);
+}
+
+static void field_setup(double soc)
+{
+    setup();
+    cfg.charge_voltage_v = 8.30;
+    bsoc = soc;
+    vpol = 0;
+    rng = 777;
+    in.discharging = 1;
+}
+
+static void field_learning(void)
+{
+    const double cap = 12.0;    // of the 8.30 V charge, 81 % of rated
+
+    // Unplugged at 90 %, 30 min idle, 2 h in the field (mean 0.38 A, the
+    // TX steps never let VBAT rest), 30 min idle, USB in, about 60 % deep. The segment runs
+    // from the first rest point (10 min after the unplug) to the last one
+    // before the charge: within 10 % of the true capacity, as one partial
+    // cycle in quiet.
+    for (int run = 0; run < 4; run++)
+    {
+        field_setup(90);
+        rng = 777 + 31 * run;
+        double e0 = 0.01 * urand();
+        double e1 = 0.01 * urand();
+        field_idle(cap, 1800, e0);
+        field_use(cap, 7200, e0, e1);
+        field_idle(cap, 1800, e1);
+        CHECK(t.part_n == 0 && t.part_state == TEL_PART_COUNT);
+        field_charge(cap, 5);
+        CHECK(t.part_n == 1);
+        CHECK(t.part_depth > 50 && t.part_depth < 70);
+        CHECK_NEAR(t.part_est, cap, 0.1 * cap);
+        // Depth weight (depth / 20 %)^2, at most 9, rest load 0.16 A.
+        double wd = (t.part_depth / 20) * (t.part_depth / 20);
+        CHECK_NEAR(t.part_weight, (wd < 9 ? wd : 9) / (1 + (I_HIZ / 0.25) * (I_HIZ / 0.25)), 1e-6);
+        CHECK(!strcmp(tel_capacity_source(&t), "partial"));
+    }
+
+    // Several field days settle within 10 % as the quiet cycles do.
+    field_setup(90);
+    for (int day = 0; day < 6; day++)
+    {
+        field_charge(cap, 1);
+        while (bsoc < 90)
+            fstep(cap, 1.0, 0, 1);
+        double e0 = 0.01 * urand();
+        double e1 = 0.01 * urand();
+        field_idle(cap, 1800, e0);
+        field_use(cap, 5400 + 600 * day, e0, e1);
+        field_idle(cap, 1200, e1);
+        field_charge(cap, 5);
+    }
+    CHECK(t.part_n == 6);
+    CHECK_NEAR(t.part_wh, cap, 0.1 * cap);
+
+    // No rest after the use: the last rest point is before it, too shallow.
+    field_setup(90);
+    field_idle(cap, 1800, 0);
+    field_use(cap, 7200, 0, 0);
+    field_charge(cap, 5);
+    CHECK(t.part_n == 0);
+
+    // A charge in the middle ends the segment. Neither half has a rest point
+    // at both ends 15 % apart, although the whole run is 45 % deep.
+    field_setup(90);
+    field_idle(cap, 1800, 0);
+    field_use(cap, 3600, 0, 0);
+    field_charge(cap, 300);
+    CHECK(t.part_n == 0 && t.part_state == TEL_PART_IDLE);
+    field_use(cap, 3600, 0, 0);
+    field_idle(cap, 1800, 0);
+    field_charge(cap, 5);
+    CHECK(t.part_n == 0);
+
+    // Too little depth between the rest points: about 11 %.
+    field_setup(90);
+    field_idle(cap, 1800, 0);
+    field_use(cap, 300, 0, 0);
+    field_idle(cap, 1800, 0);
+    field_charge(cap, 5);
+    CHECK(t.part_n == 0);
+
+    // Light use the whole time (RX only, mean 0.16 A): every second after
+    // the first 10 min is a rest point, the result is the same as quiet.
+    field_setup(90);
+    field_idle(cap, 3 * 3600, 0);
+    field_charge(cap, 5);
+    CHECK(t.part_n == 1);
+    CHECK_NEAR(t.part_est, cap, 0.05 * cap);
+
+    // Switched off after the field use, before any charge: the segment is
+    // saved and evaluated at the next start.
+    field_setup(90);
+    field_idle(cap, 1800, 0);
+    field_use(cap, 7200, 0, 0);
+    field_idle(cap, 1200, 0);
+    struct tel_saved sv;
+    tel_save(&t, &sv);
+    CHECK(sv.part_active && sv.part_e1 > 0);
+    tel_init(&t, &cfg);
+    tel_restore(&t, &sv, 7.4);
+    CHECK(t.part_n == 1 && t.learned_partial);
+    CHECK_NEAR(t.part_est, cap, 0.1 * cap);
+    CHECK(t.part_state == TEL_PART_IDLE);
+}
+
 void test_telemetry(void)
 {
     averages();
@@ -338,4 +516,6 @@ void test_telemetry(void)
     learning();
     restore();
     partial_learning();
+    vreg_table();
+    field_learning();
 }

@@ -388,7 +388,9 @@ int main(int argc, char **argv)
 
     config_defaults(&core.cfg);
     int rc = config_load(&core.cfg, conf);
-    if (rc < 0)
+    // The stock values are written even with a bad config: --restore is the
+    // fail safe of the unit file.
+    if (rc < 0 && !do_restore)
         return 1;
     if (rc > 0 && !do_restore)
         core_log(4, "%s not found, using defaults", conf);

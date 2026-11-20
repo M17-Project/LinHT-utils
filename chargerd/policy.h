@@ -74,9 +74,13 @@ struct policy
     enum pstate state;
     enum pblock block;
     int want_hiz, want_chg;
+    double min_vbat, end_vbat;  // V, quiet limits while the SoC is not trusted
     struct policy_in last;
 };
 
+// quiet_min_vbat and quiet_end_vbat of "auto" (NaN) come from the voltage
+// table, which follows the charge voltage: the end limit is the voltage of
+// quiet_end_soc, the start limit 0.10 V above it.
 void policy_init(struct policy *p, const struct chargerd_config *cfg);
 
 // Quiet(seconds) from owner. seconds = 0 releases. On success *granted is

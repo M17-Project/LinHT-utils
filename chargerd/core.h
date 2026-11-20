@@ -76,7 +76,7 @@ extern int core_log_quiet;          // the tests turn the log off
 void core_log(int prio, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 // c->cfg and c->io must be set. Probes the chip, clears EN_HIZ, sets EN_IBAT,
-// the ADC and PFM, kicks the watchdog and loads the state file.
+// the ADC, PFM and VREG, kicks the watchdog and loads the state file.
 // Returns 0 or a negative errno (-ENODEV if the chip is not a BQ25792).
 int core_init(struct core *c, double now);
 
@@ -94,6 +94,7 @@ int core_stop(struct core *c, uint8_t rb[5]);
 double core_now(void);    // CLOCK_MONOTONIC in seconds
 int core_faults(const struct core *c, const char **out, int max);
 int core_usb(const struct core *c);
+int core_vreg_10mv(const struct core *c);  // charge_voltage_v in VREG steps
 int core_discharging(const struct core *c);
 
 #endif

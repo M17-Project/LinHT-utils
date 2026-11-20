@@ -6,13 +6,15 @@ I2C bus 2, address 0x6B, and is the only program that writes to it.
 What it does:
 
 - keeps the charger in host mode and kicks its 40 s watchdog every 10 s,
+- sets the charge voltage (VREG) from the config, 8.30 V by default,
 - reads the charger ADC once per second (continuous conversion, 15 bit),
   and sets the charger up again when the ADC stops on USB,
 - offers the readings, averages and battery estimates on the system D-Bus,
 - gives quiet leases. A lease puts the charger in HIZ, the only state in
   which the charger does not raise the receiver noise floor,
 - learns the battery capacity and the state of health from discharges,
-  from full ones (reliable) and from partial ones (low precision).
+  from full ones (reliable) and from partial ones (low precision), in
+  quiet on USB and on battery in the field.
 
 It does not handle the i.MX93 SoC ADC (`iio:device0`, its calibration failure
 on Rev C and the volume knob). The battery voltage comes only from the
@@ -55,9 +57,10 @@ file or key keeps the default.
 | `quiet_min_soc` | 25 | % on USB, new leases are refused below |
 | `quiet_end_soc` | 20 | % on USB, all leases end and charging resumes |
 | `quiet_resume_soc` | 40 | % leases are allowed again after a low battery end |
-| `quiet_min_vbat`, `quiet_end_vbat` | 7.45, 7.35 | V, used instead while the SoC is not anchored at full (7.35 V is about 20 % on the voltage table) |
+| `quiet_min_vbat`, `quiet_end_vbat` | `auto` | V, used instead while the SoC is not anchored at full. `auto`: the end limit is the voltage of `quiet_end_soc` on the voltage table, the start limit 0.10 V above (7.42 and 7.32 V at 8.30 V VREG, 7.43 and 7.33 V at 8.40 V) |
 | `low_soc`, `critical_soc` | 15, 5 | % for the `LowBattery` signal on battery |
 | `battery`, `cells` | Retevis C62, 2 | pack description, series cells |
+| `charge_voltage_v` | 8.30 | V per pack, written to VREG. 4.00 to 4.20 V per cell (8.00 to 8.40 V for 2S), the daemon refuses to start outside. See [Charge voltage](#charge-voltage) |
 | `capacity_rated_wh`, `capacity_rated_mah` | 14.8, 2000 | from the pack label |
 
 A new chassis or pack only changes the battery lines.
@@ -125,6 +128,7 @@ Measurements, poll them with `GetAll` every 1 to 5 s:
 | `UsbCurrent` | A | ADC IBUS |
 | `BatteryPower`, `UsbPower` | W | V times I |
 | `DieTemperature` | °C | charger die, not the battery |
+| `ChargeVoltage` | V | VREG read back from the charger |
 | `MeasurementAgeSec` | s | time since the ADC results last changed |
 | `ChargerRecoveries` | u | charger init attempts for a stopped ADC since the start, see below |
 | `BatteryPowerAvg1m`, `Avg10m`, `Avg60m` | W | NaN with less than half a window |
@@ -136,7 +140,7 @@ Measurements, poll them with `GetAll` every 1 to 5 s:
 | `TimeToFullSec` | x | -1 when not charging, optimistic in CV |
 | `OnBatterySec`, `ChargingSec` | t | since the battery started to supply the unit, or since the charge started |
 | `CapacityRatedWh`, `CapacityLearnedWh` | Wh | from the config, learned from full anchored discharges |
-| `CapacityPartialWh` | Wh | low precision estimate from partial cycles, NaN before the first one |
+| `CapacityPartialWh` | Wh | low precision estimate from partial cycles (quiet and on battery), NaN before the first one |
 | `CapacityPartialSamples` | u | partial cycles used |
 | `CapacityPartialWeight` | | sum of their decayed weights, about 1 per 20 % deep cycle at light load. Below 2 the estimate is rough |
 | `StateOfHealthPercent` | % | capacity in use / rated, see `StateOfHealthSource` |
@@ -196,6 +200,7 @@ The daemon writes only these bits, always read, modify, write:
 
 | Register | Bits | Why |
 |---|---|---|
+| REG01, REG02 | VREG | `charge_voltage_v` |
 | REG0F | EN_HIZ, EN_CHG | quiet, `SetCharging` |
 | REG10 | WD_RST | watchdog kick every 10 s, the 40 s setting stays |
 | REG12 | PFM_FWD_DIS | `pfm` |
@@ -203,12 +208,15 @@ The daemon writes only these bits, always read, modify, write:
 | REG2E | ADC_EN, ADC_RATE, ADC_SAMPLE | continuous, 15 bit |
 
 It never writes REG13 (PWM_FREQ, 750 kHz is not allowed with the 1 uH L9),
-VINDPM, IINDPM, VREG, ICHG, REG_RST or the ADC channel disables. At start it
+VINDPM, IINDPM, ICHG, REG_RST, the protection thresholds or the ADC channel
+disables. At start it
 refuses to run when REG48 does not show a BQ25792, and it warns when CELL is
 not the configured cell count or PWM_FREQ is not 1.5 MHz.
 
 Every poll compares the bits with what the daemon wants and sets them again
-when they differ (watchdog expiry, USB plug in, another writer). Such a
+when they differ (watchdog expiry, USB plug in, a reset of the charger,
+another writer). VREG is part of this, so a lost VREG is set again within
+one second, also during a stopped ADC and after its recovery. Such a
 difference is logged once per minute.
 
 States, in priority order:
@@ -221,7 +229,7 @@ States, in priority order:
 | `quiet` | USB and at least one lease | EN_HIZ = 1 |
 | `full-hold` | USB, battery full, `full_hold = on` | EN_HIZ = 1 until the SoC is below `full_hold_resume_soc` |
 | `charge-off` | `SetCharging(false)` | EN_CHG = 0 |
-| `full` | CHG_STAT done, or VBAT at least VREG minus 0.05 V with IBAT below 0.2 A for 60 s | EN_HIZ = 0 |
+| `full` | CHG_STAT done, or VBAT at least VREG minus 0.05 V with IBAT below 0.2 A for 60 s. VREG is the read back value, so this follows `charge_voltage_v` | EN_HIZ = 0 |
 | `charging` | the rest | EN_HIZ = 0, EN_CHG = 1 |
 
 The second `full` rule is for a weak USB source, where the charger stays in
@@ -254,13 +262,15 @@ The daemon now does the same writes as a restart by itself:
   battery there is no recovery either.
 - The recovery never writes REG0F. EN_CHG stays as `SetCharging` has it and
   the charger's own OVP keeps the converter off as long as it is active.
-  VREG, ICHG, the input limits and the protections are never written.
+  The start-up writes include VREG when it differs from `charge_voltage_v`.
+  ICHG, the input limits and the protections are never written.
 
 A VBAT_OVP that comes right at the end of charge is shown as State `full`,
 not `fault`, when all of this holds: VBAT_OVP is the only fault (status or
 flag), VBUS is present, VREG is not above 4.2 V per cell, and the last fresh
 VBAT was between VREG minus 0.05 V and 101 % of VREG (the lowest OVP release
-level of the data sheet, 8.48 V at 8.40 V). The battery is then at the end
+level of the data sheet, 8.48 V at 8.40 V, 8.38 V at 8.30 V). VREG is the
+read back value, so the window follows `charge_voltage_v`. The battery is then at the end
 of its charge and the charger only stopped early. `Faults` still lists
 `vbat-ovp`, but quiet is not blocked: a lease puts the charger in HIZ, which
 stops the charging and is the safest state during this OVP. State is then
@@ -283,12 +293,41 @@ PFM_FWD_DIS. So:
 - The unit file runs `linht-chargerd --restore` in `ExecStopPost`, after
   any exit, also after SIGKILL or a crash.
 - Every start clears EN_HIZ first, because leases do not survive a restart.
+- The stop and `--restore` leave VREG at `charge_voltage_v`. A lower charge
+  voltage is the safe side. A power on reset of the charger sets VREG back
+  to the value of its PROG pin (8.40 V on our units).
 - Replugging USB clears EN_HIZ in the charger itself.
 
 Other charger tools must stop the daemon first (`systemctl stop
 linht-chargerd`). The daemon holds `flock` on `/dev/i2c-2`, so
 `bq25792_status.py` refuses to run next to it. `i2cget` still works for
 reads, but do not read REG22 to REG27 by hand, the read clears the flags.
+
+## Charge voltage
+
+`charge_voltage_v` (default 8.30 V, 4.15 V per cell) is written to VREG
+(REG01, REG02, 10 mV steps) at start and whenever the read back differs.
+`ChargeVoltage` and the start log line show the read back value.
+Everything that depends on the end of charge follows it: the voltage
+table (100 % at VREG), the second `full` rule (VREG minus 0.05 V), the
+full anchor and so the reliable learning, the VBAT_OVP at full window
+(VREG minus 0.05 V to 101 % of VREG) and the `auto` quiet voltage limits.
+
+The trade-off: a Li-ion NMC cell charged to 4.15 V instead of 4.20 V
+stores about 8 to 10 % less energy (the generic table of the daemon says
+5 %, it is coarse near full), and spends less time at the high voltage
+that ages it fastest, so it gives clearly more cycles and lasts longer
+when it is kept on USB. 8.40 V gives the longest run time. The charger
+terminates the charge at VREG with its termination current, so the SoC is
+100 % at either setting and `CapacityLearnedWh` learns the energy of the
+chosen setting (expect it to drop by that amount after a change).
+
+VBAT_OVP is not the charge target. It is a protection threshold of the
+charger at about 104 % of VREG (8.74 V at 8.40 V, 8.63 V at 8.30 V). The
+repeated VBAT_OVP of the Rev C unit at about 8.44 V (VREG 8.40 V) is far
+below that threshold and is not explained. The lower VREG is not a fix for
+it. Running at 8.30 V will show whether the OVP changes, it moves the end
+of charge 0.10 V down.
 
 ## Estimates
 
@@ -300,28 +339,63 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
   anchor the SoC comes from a generic 2S NMC voltage table, 10 to 20 % off
   under load. After a restart the saved counter is used again when the
   voltage agrees within 15 %.
+- The table has 100 % at 4.20 V per cell. The daemon scales it so that
+  `charge_voltage_v` is 100 %: at 8.30 V the table value of 4.15 V per cell
+  (95 %) becomes 100 %, 7.60 V becomes 52.6 % instead of 50 %. So the
+  voltage SoC, the counter SoC after a full anchor, the depth of the
+  learning discharges and the `auto` quiet voltage limits all refer to the
+  energy of a charge to the configured VREG.
 - Learning: a discharge from a full anchor at a mean load below 3 W that
   ends at a voltage SoC of 50 % or less gives C_est = E_out / (1 - SoC_v / 100).
   C moves towards C_est with the weight 0.5 times the depth, clamped to 50
   to 110 % of rated.
 - Partial cycles: the FART auto mode keeps the battery between about 50 and
-  70 % (quiet while the SoC is at least 50 %, charge back to 70 %), so it
-  never reaches a full anchor. In quiet (HIZ) the load is small and steady
-  (about 0.16 A), so VBAT is close to the open circuit voltage and the
-  voltage table gives the SoC at both ends of the discharge. Every
-  discharge segment is evaluated: the first 10 min are skipped (VBAT
-  relaxes after the charge), then the energy is counted until a charge
-  current above 0.05 A ends the segment. A short gap without charge
-  current, for example between two leases, does not end it. A segment of
-  at least 15 % by the table at a mean load up to 0.6 A gives
+  70 % (quiet while the SoC is at least 50 %, charge back to 70 %), and in
+  the field the radio runs on battery and is charged to whatever level the
+  user likes. Neither reaches a full anchor and an empty battery. Both are
+  learned from rest points (see the next point). A segment runs from a
+  rest point to the last rest point before a charge current above 0.05 A
+  (or a full anchor) ends it. The energy (VBAT times IBAT) is counted in
+  between, whatever the load is, so TX in the field is no problem. A short
+  gap without charge current, for example between two leases, does not end
+  the segment. A segment of at least 15 % by the table, with a mean current
+  up to 0.6 A between its two rest points, gives
   C_est = E_out / (SoC_v start - SoC_v end), dropped outside 40 to 160 %
   of rated. Its weight is (depth / 20 %) squared, at most 9, divided by
-  1 + (I_mean / 0.25 A) squared: about 0.6 for a 20 % segment in quiet.
-  The estimate starts at `CapacityLearnedWh` with the weight 1, every new
-  segment first multiplies the old weights by 0.9, then the estimate moves
-  towards C_est by its share of the weight. So one segment changes a
-  settled estimate by about a tenth of its error at most, and old segments
-  fade out as the battery ages. Clamped to 50 to 110 % of rated.
+  1 + (I_rest / 0.25 A) squared, with I_rest the mean load at the two rest
+  points: about 0.6 for a 20 % segment in quiet or idle RX (0.16 A), about
+  6 for a 60 % field day. The estimate starts at `CapacityLearnedWh` with the
+  weight 1, every new segment first multiplies the old weights by 0.9, then
+  the estimate moves towards C_est by its share of the weight. So one
+  shallow segment changes a settled estimate by about a tenth of its error
+  at most, and old segments fade out as the battery ages. Clamped to 50 to
+  110 % of rated.
+- Rest point: a moment after at least 10 min of discharge without charge
+  current, with a mean load of at most 0.3 A over those 10 min and over the
+  last minute. VBAT (30 s average) is then close to the open circuit voltage
+  and the table gives the SoC. In quiet on USB the first 10 min after the
+  charge are skipped this way (VBAT relaxes after the charge), after that
+  every second is a rest point. On battery a charge cannot happen, so the
+  rule is the load: idle RX (about 0.16 A) is a rest, TX is not. Use in the
+  field with TX every few minutes has no rest point, the idle time before
+  it (from 10 min after the unplug) and after it (10 min or more) gives the
+  two ends. A USB charge ends the segment, so no segment spans a charge.
+  When the unit is switched off or the daemon stops, the segment so far
+  (start and last rest point) is in `state.json` and is evaluated at the
+  next start. The voltage table itself is not learned, `cycles.jsonl` keeps
+  the discharge curves for a later fit.
+- Accuracy of the partial estimate. The table is generic, a few 10 mV per
+  pack off is 1 to 3 % of SoC at each end. The IR drop at the rest load
+  (0.16 A times about 0.15 ohm, 25 mV) is about the same at both ends, but
+  the table is steeper near full than near 30 %, so it reads the depth a
+  little too large and C_est a few % too low. After heavy TX the cells
+  relax for longer than 10 min, a rest point right after use reads a few
+  10 mV low. The integration of VBAT times IBAT is better than 1 %. In the
+  tests with the synthetic battery (table error up to 10 mV per pack at
+  each end, IR drop, slow polarization) a single 60 % field day comes out
+  about 6 % low (the IR drop effect above), a 20 % quiet cycle within
+  10 %, and several of either settle within 10 % of the true capacity. A steady offset against a full
+  anchored learning means the table does not fit the cells.
 - Capacity in use (`StateOfHealthSource`): the learned one when it is
   reliable, else the partial estimate when there is one, else the learned
   one as it is. The SoC counter, `EnergyRemainingWh`, the run times and
@@ -332,8 +406,8 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
   1 min average until 10 min are filled).
 
 `state.json` holds the learned capacity, the partial estimate with its
-weight and count, the counter and the anchor. A partial segment in progress
-is not saved, a restart starts a new one. It is
+weight and count, the counter, the anchor and a partial segment in
+progress (evaluated at the next start). It is
 written atomically every 15 min, on a full anchor, at the end of a cycle and
 at a clean stop. `cycles.jsonl` gets one line per discharge or charge of at
 least 10 %: times, VBAT and SoC at start and end, energy, charge, mean power,
@@ -354,6 +428,11 @@ These need hours and are not part of `make test`:
   The battery drains as on battery until `quiet_end_soc` ends the lease,
   then the charge starts and the discharge (about 80 % deep) is evaluated at
   once.
+- Field use: charge, unplug, leave the unit idle for 20 min, use it on
+  battery for a few hours (60 % or so), leave it idle for 20 min, plug in
+  USB. The charge logs "partial cycle" with the depth, C_est and the
+  weight. Switching the unit off instead of plugging in logs it at the next
+  start as "partial cycle (segment of the last run)".
 - Partial cycles: run the FART auto mode on USB for a day (several 50 to
   70 % cycles). Every return to charging logs "partial cycle" with the
   depth, C_est and the weight. Compare `CapacityPartialWh` with a full
