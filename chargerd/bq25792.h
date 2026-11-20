@@ -66,6 +66,9 @@ struct bq_io
     // Both return 0 or a negative errno.
     int (*read)(void *ctx, uint8_t reg, uint8_t *buf, unsigned len);
     int (*write)(void *ctx, uint8_t reg, uint8_t val);
+    // Two bytes from reg on in one transfer. The 16 bit registers (VREG)
+    // need it: the BQ25792 ignores a one byte write to REG02.
+    int (*write2)(void *ctx, uint8_t reg, uint8_t hi, uint8_t lo);
     void *ctx;
     int fd;                     // real I2C only
     int addr;

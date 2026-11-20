@@ -21,6 +21,7 @@ struct fake_chip
     unsigned wd_expiries;
     unsigned adc_tick;
     int adc_frozen;             // results stop changing (stale)
+    unsigned ignored_writes;    // one byte writes to VREG, ignored
 };
 
 void fake_init(struct fake_chip *f, struct bq_io *io);

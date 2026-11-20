@@ -307,6 +307,9 @@ reads, but do not read REG22 to REG27 by hand, the read clears the flags.
 
 `charge_voltage_v` (default 8.30 V, 4.15 V per cell) is written to VREG
 (REG01, REG02, 10 mV steps) at start and whenever the read back differs.
+Both bytes go in one I2C transfer: the Rev C charger ignored a one byte
+write to REG02 (the read back stayed 8.40 V), a two byte write from REG01
+took at once.
 `ChargeVoltage` and the start log line show the read back value.
 Everything that depends on the end of charge follows it: the voltage
 table (100 % at VREG), the second `full` rule (VREG minus 0.05 V), the

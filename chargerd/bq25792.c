@@ -37,6 +37,16 @@ static int i2c_write(void *ctx, uint8_t reg, uint8_t val)
     return ioctl(io->fd, I2C_RDWR, &x) == 1 ? 0 : -errno;
 }
 
+static int i2c_write2(void *ctx, uint8_t reg, uint8_t hi, uint8_t lo)
+{
+    struct bq_io *io = ctx;
+    uint8_t b[3] = { reg, hi, lo };
+    struct i2c_msg msg = { .addr = (uint16_t)io->addr, .flags = 0, .len = 3, .buf = b };
+    struct i2c_rdwr_ioctl_data x = { .msgs = &msg, .nmsgs = 1 };
+
+    return ioctl(io->fd, I2C_RDWR, &x) == 1 ? 0 : -errno;
+}
+
 int bq_open(struct bq_io *io, const char *dev, int addr)
 {
     memset(io, 0, sizeof(*io));
@@ -59,6 +69,7 @@ int bq_open(struct bq_io *io, const char *dev, int addr)
     io->addr = addr;
     io->read = i2c_read;
     io->write = i2c_write;
+    io->write2 = i2c_write2;
     io->ctx = io;
     return 0;
 }
@@ -158,18 +169,21 @@ int bq_enforce(struct bq_io *io, uint8_t regs[BQ_NREGS], const struct bq_want *w
         return rc;
     done |= rc ? BQ_FIX_REG2E : 0;
 
-    // Charge voltage. High byte first, the reserved bits 7:3 of REG01 stay.
-    // Between 8.00 and 8.40 V (0x320 to 0x348) only REG02 changes.
+    // Charge voltage, both bytes in one transfer (a one byte write to REG02
+    // is ignored by the chip). The reserved bits 7:3 of REG01 stay.
     if (w->vreg_10mv > 0)
     {
-        int rc2;
-        rc = fix(io, regs, BQ_REG_VREG, 0x07, (uint8_t)((w->vreg_10mv >> 8) & 0x07));
-        if (rc < 0)
-            return rc;
-        rc2 = fix(io, regs, BQ_REG_VREG + 1, 0xff, (uint8_t)(w->vreg_10mv & 0xff));
-        if (rc2 < 0)
-            return rc2;
-        done |= rc || rc2 ? BQ_FIX_VREG : 0;
+        uint8_t hi = (uint8_t)((regs[BQ_REG_VREG] & ~0x07) | ((w->vreg_10mv >> 8) & 0x07));
+        uint8_t lo = (uint8_t)(w->vreg_10mv & 0xff);
+        if (hi != regs[BQ_REG_VREG] || lo != regs[BQ_REG_VREG + 1])
+        {
+            rc = io->write2(io->ctx, BQ_REG_VREG, hi, lo);
+            if (rc < 0)
+                return rc;
+            regs[BQ_REG_VREG] = hi;
+            regs[BQ_REG_VREG + 1] = lo;
+            done |= BQ_FIX_VREG;
+        }
     }
 
     return done;
