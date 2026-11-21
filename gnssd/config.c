@@ -29,7 +29,7 @@ void config_defaults(struct gnssd_config *c)
     c->send_command = 0;
     c->time_sync = TS_AUTO;
     c->time_sync_threshold_s = 2.0;
-    c->time_sync_delay_ms = 0;
+    c->time_sync_delay_ms = 125;
     snprintf(c->rtc_device, sizeof(c->rtc_device), "/dev/rtc1");
 }
 

@@ -66,7 +66,7 @@ file or key keeps the default.
 | `send_command` | `off` | `SendCommand` allowed (root only) |
 | `time_sync` | `auto` | `auto`, `off` or `always`, see Time sync |
 | `time_sync_threshold_s` | 2 | s, a larger offset steps the system clock |
-| `time_sync_delay_ms` | 0 | ms from the start of the second to the first byte of RMC, see Time sync |
+| `time_sync_delay_ms` | 125 | ms from the start of the second to the first byte of RMC, see Time sync |
 | `rtc_device` | `/dev/rtc1` | battery-backed RTC, empty turns the RTC writes off |
 
 ## D-Bus API
@@ -245,8 +245,8 @@ A failed step (no `CAP_SYS_TIME`) is tried again after 10 minutes. Each
 step and each RTC write goes to the journal:
 
 ```
-system clock stepped by +3600.079 s from GNSS, 2026-11-21T07:48:20Z -> 2026-11-21T08:48:20Z
-/dev/rtc1 set to 2026-11-21T08:48:21Z from GNSS (after the step)
+system clock stepped by -2.540 s from GNSS, 2026-11-21T08:56:01Z -> 2026-11-21T08:55:59Z
+/dev/rtc1 set to 2026-11-21T08:56:00Z from GNSS (after the step)
 ```
 
 `rtc1` counts whole seconds and its driver clears the hundredths when it
@@ -261,16 +261,23 @@ second boundary. The RMC time is the start of the epoch, and RMC is the
 first sentence of the epoch. The daemon takes the system time when the
 RMC line is complete and subtracts the time of the line on the wire (76
 characters at 9600 baud are 79 ms) and `time_sync_delay_ms`, the delay of
-the receiver from the start of the second to its first byte.
+the receiver and the UART driver from the start of the second to the first
+byte.
 
-That delay is not measured yet, so it is 0 and the system clock ends up
-late by the delay. Expect an error up to about 0.5 s. On Rev C indoors
-(2026-11-21) the RMC arrived 0.58 to 0.61 s after the second of the system
-clock, a spread of 30 ms, but the receiver had no valid time then, so this
-gives the jitter and not the delay. To measure it, run the unit outdoors
-with NTP synchronised and `time_sync_delay_ms = 0`: `TimeSyncOffsetSec` is
-then the delay in seconds. Put it into `time_sync_delay_ms`. For better
-than a few milliseconds the 1PPS on GPIO4_IO08 would be needed.
+The default of 125 ms comes from one measurement on Rev C (2026-11-21,
+indoors near a window, a 3D fix with 4 to 5 satellites). With
+`time_sync_delay_ms = 0` the daemon stepped the clock, and the clock was
+then 127 ms behind an NTP synchronised PC on the LAN (offset measured over
+ssh with a round trip below 1 ms). The RMC arrival jitters by about 30 ms
+from epoch to epoch, and the median of 5 epochs takes most of that out.
+Without a fix the receiver epochs drift against the true second, which is
+one more reason to use only a stable fix.
+
+With the default the error should be a few tens of milliseconds (to be
+confirmed outdoors with a better fix), and below 0.5 s in any case. To measure the delay again, run the unit with NTP
+synchronised and `time_sync_delay_ms = 0`: `TimeSyncOffsetSec` is then the
+delay in seconds. For better than a few milliseconds the 1PPS on
+GPIO4_IO08 would be needed.
 
 ## Receiver commands
 

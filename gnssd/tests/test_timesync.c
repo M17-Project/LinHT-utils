@@ -77,6 +77,7 @@ static void setup(struct core *c, double system_minus_gnss)
     memset(&T, 0, sizeof(T));
     memset(c, 0, sizeof(*c));
     config_defaults(&c->cfg);
+    c->cfg.time_sync_delay_ms = 0;
     core_init(c, &tops, NULL);
     core_tick(c, 0);
     char d[8];
@@ -355,7 +356,8 @@ static void test_ts_config(void)
     close(fd);
     struct gnssd_config c;
     config_defaults(&c);
-    CHECK(c.time_sync == TS_AUTO && c.time_sync_threshold_s == 2 && !strcmp(c.rtc_device, "/dev/rtc1"));
+    CHECK(c.time_sync == TS_AUTO && c.time_sync_threshold_s == 2 && c.time_sync_delay_ms == 125 &&
+          !strcmp(c.rtc_device, "/dev/rtc1"));
     CHECK(config_load(&c, path) == 0);
     CHECK(c.time_sync == TS_ALWAYS && c.time_sync_threshold_s == 5 && !c.rtc_device[0]);
     CHECK(!strcmp(time_sync_mode_name(c.time_sync), "always"));
