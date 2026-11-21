@@ -55,6 +55,7 @@ void core_init(struct core *c, const struct core_ops *ops, void *ctx)
     c->fix_prev = -1;
     c->valid_prev = -1;
     c->last_pos = -1e9;
+    ts_init(&c->ts);
     nmea_snapshot(&c->st, 1, c->cfg.stale_s, &c->snap);
 }
 
@@ -223,6 +224,7 @@ int core_restart(struct core *c, const char *mode, double now)
     c->power = P_ON;
     c->link_since = now;
     c->last_utc_s = -1;
+    c->ts.n = 0;
     if (c->health == H_STANDBY)
         set_health(c, H_STARTING);
     return 0;
@@ -330,6 +332,7 @@ static void on_line(struct core *c, const char *line, double now)
             c->last_step_ms = ms;
         }
         c->last_utc_s = t;
+        ts_rmc(c, strlen(line), now);
     }
     if (k == NMEA_PROPRIETARY && c->st.startup_seq != c->startup_seen)
     {

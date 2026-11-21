@@ -6,6 +6,7 @@
 //   linht-gnssd restart MODE         hot, warm, cold, full-cold or reset
 //   linht-gnssd rate MS              fix interval, 1000 to 10000 ms
 //   linht-gnssd send COMMAND         raw command, root and send_command = on
+//   linht-gnssd sync-time            system clock and rtc1 from GNSS now, root
 
 #include <errno.h>
 #include <math.h>
@@ -39,7 +40,8 @@ static void usage(FILE *f)
             "       linht-gnssd wake               end the standby\n"
             "       linht-gnssd restart MODE       hot, warm, cold, full-cold or reset (RESET_N)\n"
             "       linht-gnssd rate MS            fix interval, 1000 to 10000 ms in whole seconds\n"
-            "       linht-gnssd send COMMAND       raw command, for example PMTK414 (root only)\n");
+            "       linht-gnssd send COMMAND       raw command, for example PMTK414 (root only)\n"
+            "       linht-gnssd sync-time          system clock and RTC from GNSS now (root only)\n");
 }
 
 // --- Receiver I/O for core ---
@@ -98,12 +100,40 @@ static void forward(void *ctx, const char *line, size_t n)
         }
 }
 
+static int sys_realtime(void *ctx, struct timespec *ts)
+{
+    (void)ctx;
+    return clock_gettime(CLOCK_REALTIME, ts) < 0 ? -errno : 0;
+}
+
+static int sys_set_realtime(void *ctx, const struct timespec *ts)
+{
+    (void)ctx;
+    return clock_settime(CLOCK_REALTIME, ts) < 0 ? -errno : 0;
+}
+
+static int sys_rtc_write(void *ctx, double offset, time_t *written)
+{
+    (void)ctx;
+    return rtc_set_from_system(core.cfg.rtc_device, offset, written);
+}
+
+static int sys_ntp_synced(void *ctx)
+{
+    (void)ctx;
+    return clock_ntp_synced();
+}
+
 static const struct core_ops ops = {
     .open = tty_open_cb,
     .close = tty_close,
     .write = tty_write,
     .reset = tty_reset,
     .forward = forward,
+    .realtime = sys_realtime,
+    .set_realtime = sys_set_realtime,
+    .rtc_write = sys_rtc_write,
+    .ntp_synced = sys_ntp_synced,
 };
 
 static int on_tty(sd_event_source *s, int fd, uint32_t revents, void *userdata)
@@ -236,8 +266,8 @@ static int daemon_run(void)
     }
     if (r >= 0)
     {
-        core_log(6, "running, bus name %s, %s at %u baud", GNSS_BUS_NAME, core.cfg.device,
-                 core.cfg.baud);
+        core_log(6, "running, bus name %s, %s at %u baud, time sync %s", GNSS_BUS_NAME,
+                 core.cfg.device, core.cfg.baud, time_sync_mode_name(core.cfg.time_sync));
         r = sd_event_loop(event);
     }
     else
@@ -464,6 +494,13 @@ static int call(const char *method, const char *sig, const char *arg, uint32_t n
         while (sd_bus_message_read(reply, "s", &line) > 0)
             printf("%s\n", line);
     }
+    else if (!strcmp(method, "SyncTimeNow"))
+    {
+        double off;
+        int stepped;
+        if (sd_bus_message_read(reply, "db", &off, &stepped) > 0)
+            printf("offset %+.3f s, %s\n", off, stepped ? "system clock stepped" : "not stepped");
+    }
     sd_bus_error_free(&err);
     sd_bus_message_unref(reply);
     sd_bus_unref(bus);
@@ -503,6 +540,8 @@ int main(int argc, char **argv)
             return call("Wake", "", NULL, 0);
         if (!strcmp(cmd, "restart") && nargs == 1)
             return call("Restart", "s", arg, 0);
+        if (!strcmp(cmd, "sync-time") && nargs == 0)
+            return call("SyncTimeNow", "", NULL, 0);
         if (!strcmp(cmd, "send") && nargs == 1)
             return call("SendCommand", "s", arg, 0);
         if (!strcmp(cmd, "rate") && nargs == 1)

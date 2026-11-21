@@ -34,5 +34,6 @@ extern int check_failed, check_count;
 
 void test_nmea(void);
 void test_core(void);
+void test_timesync(void);
 
 #endif

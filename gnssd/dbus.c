@@ -13,11 +13,13 @@
 struct props
 {
     const char *fix, *health, *power, *antenna, *version, *utc, *device, *pty, *sock;
+    const char *ts_mode, *last_sync;
+    double ts_offset;
     int valid, time_valid;
     double lat, lon, alt, speed, course, hdop, pdop, vdop, cn0_best, cn0_mean, age;
     uint32_t used, view, tracked, interval, reopens, resets, bad, dropped;
     uint64_t sentences;
-    char antenna_buf[24], version_buf[136], utc_buf[32];
+    char antenna_buf[24], version_buf[136], utc_buf[32], last_sync_buf[32];
 };
 
 static struct
@@ -72,6 +74,10 @@ static void refresh(struct props *p, double now)
     p->bad = c->st.bad;
     p->dropped = S.f->dropped;
     p->sentences = c->st.sentences;
+    p->ts_mode = time_sync_mode_name(c->cfg.time_sync);
+    snprintf(p->last_sync_buf, sizeof(p->last_sync_buf), "%s", c->ts.last_sync);
+    p->last_sync = p->last_sync_buf;
+    p->ts_offset = c->ts.offset;
 }
 
 // --- Getters, userdata points at the field ---
@@ -181,6 +187,8 @@ static int wait_for(sd_bus_message *m, int r)
     return 1;
 }
 
+static int root_only(sd_bus_message *m, sd_bus_error *err, const char *what);
+
 static int method_standby(sd_bus_message *m, void *userdata, sd_bus_error *err)
 {
     (void)userdata, (void)err;
@@ -226,15 +234,45 @@ static int method_send(sd_bus_message *m, void *userdata, sd_bus_error *err)
         return r;
     if (!S.c->cfg.send_command)
         return sd_bus_error_set(err, GNSS_ERROR "Disabled", "send_command = off in gnssd.conf");
+    if ((r = root_only(m, err, "SendCommand")) < 0)
+        return r;
+    return wait_for(m, core_raw(S.c, cmd, core_now()));
+}
+
+static int root_only(sd_bus_message *m, sd_bus_error *err, const char *what)
+{
     sd_bus_creds *creds = NULL;
     uid_t uid = (uid_t)-1;
-    r = sd_bus_query_sender_creds(m, SD_BUS_CREDS_EUID | SD_BUS_CREDS_AUGMENT, &creds);
+    int r = sd_bus_query_sender_creds(m, SD_BUS_CREDS_EUID | SD_BUS_CREDS_AUGMENT, &creds);
     if (r >= 0)
         r = sd_bus_creds_get_euid(creds, &uid);
     sd_bus_creds_unref(creds);
     if (r < 0 || uid != 0)
-        return sd_bus_error_set(err, SD_BUS_ERROR_ACCESS_DENIED, "SendCommand is for root only");
-    return wait_for(m, core_raw(S.c, cmd, core_now()));
+        return sd_bus_error_setf(err, SD_BUS_ERROR_ACCESS_DENIED, "%s is for root only", what);
+    return 0;
+}
+
+static int method_sync_time(sd_bus_message *m, void *userdata, sd_bus_error *err)
+{
+    (void)userdata;
+    int r = root_only(m, err, "SyncTimeNow");
+    if (r < 0)
+        return r;
+    int stepped = 0;
+    double now = core_now();
+    core_update(S.c, now);
+    r = ts_sync_now(S.c, now, &stepped);
+    if (r == -ENODATA)
+        return sd_bus_error_set(err, GNSS_ERROR "NoFix",
+                                "no stable GNSS time (3D fix, 4 satellites, 5 epochs that agree)");
+    if (r == -EALREADY)
+        return sd_bus_error_setf(err, GNSS_ERROR "NtpSynchronized",
+                                 "NTP keeps the system clock and it is %+.3f s off GNSS",
+                                 S.c->ts.offset);
+    if (r < 0)
+        return sd_bus_error_setf(err, GNSS_ERROR "Failed", "clock step: %s", strerror(-r));
+    dbus_update();
+    return sd_bus_reply_method_return(m, "db", S.c->ts.offset, stepped);
 }
 
 static void finish_waiting(void)
@@ -283,6 +321,8 @@ static const sd_bus_vtable vtable[] = {
                              SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD_WITH_NAMES("SendCommand", "s", SD_BUS_PARAM(command), "as", SD_BUS_PARAM(replies),
                              method_send, SD_BUS_VTABLE_UNPRIVILEGED),
+    SD_BUS_METHOD_WITH_NAMES("SyncTimeNow", "", , "db", SD_BUS_PARAM(offset) SD_BUS_PARAM(stepped),
+                             method_sync_time, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_SIGNAL_WITH_NAMES("FixChanged", "sb", SD_BUS_PARAM(fix) SD_BUS_PARAM(valid), 0),
     SD_BUS_SIGNAL_WITH_NAMES("PositionChanged", "ddd",
                              SD_BUS_PARAM(latitude) SD_BUS_PARAM(longitude) SD_BUS_PARAM(altitude), 0),
@@ -322,12 +362,15 @@ static const sd_bus_vtable vtable[] = {
     P("NmeaPty", "s", get_s, pty, 0),
     P("NmeaSocket", "s", get_s, sock, 0),
     P("NmeaDropped", "u", get_u, dropped, 0),
+    P("TimeSyncMode", "s", get_s, ts_mode, SD_BUS_VTABLE_PROPERTY_CONST),
+    P("LastTimeSync", "s", get_s, last_sync, EMITS),
+    P("TimeSyncOffsetSec", "d", get_d, ts_offset, 0),
     SD_BUS_VTABLE_END,
 };
 
 void dbus_update(void)
 {
-    const char *changed[8];
+    const char *changed[12];
     int n = 0;
 
     if (!S.bus)
@@ -352,6 +395,7 @@ void dbus_update(void)
     CHS(antenna_buf, "AntennaStatus");
     CHS(version_buf, "ModuleVersion");
     CH(time_valid, "TimeValid");
+    CHS(last_sync_buf, "LastTimeSync");
 #undef CH
 #undef CHS
     changed[n] = NULL;

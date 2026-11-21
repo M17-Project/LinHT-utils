@@ -13,10 +13,10 @@ SYSCONFDIR ?= /etc
 UNITDIR ?= /lib/systemd/system
 DBUSDIR ?= $(PREFIX)/share/dbus-1/system.d
 
-LIB = core.c nmea.c config.c
+LIB = core.c nmea.c config.c timesync.c
 SRC = main.c dbus.c feed.c tty.c $(LIB)
 HDR = $(wildcard *.h)
-TESTS = tests/run.c tests/test_nmea.c tests/test_core.c
+TESTS = tests/run.c tests/test_nmea.c tests/test_core.c tests/test_timesync.c
 TEST_HDR = $(wildcard tests/*.h)
 
 all: linht-gnssd

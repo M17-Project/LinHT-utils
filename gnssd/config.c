@@ -27,9 +27,20 @@ void config_defaults(struct gnssd_config *c)
     snprintf(c->socket_path, sizeof(c->socket_path), "/run/linht-gnssd/nmea.sock");
     snprintf(c->feed_group, sizeof(c->feed_group), "dialout");
     c->send_command = 0;
+    c->time_sync = TS_AUTO;
+    c->time_sync_threshold_s = 2.0;
+    c->time_sync_delay_ms = 0;
+    snprintf(c->rtc_device, sizeof(c->rtc_device), "/dev/rtc1");
 }
 
-enum kind { K_STR, K_INT, K_UINT, K_DBL, K_BOOL };
+static const char *const ts_modes[] = { "auto", "off", "always" };
+
+const char *time_sync_mode_name(int mode)
+{
+    return mode >= 0 && mode <= TS_ALWAYS ? ts_modes[mode] : "?";
+}
+
+enum kind { K_STR, K_INT, K_UINT, K_DBL, K_BOOL, K_MODE };
 
 struct key
 {
@@ -44,13 +55,15 @@ struct key
 #define U(n) { #n, K_UINT, offsetof(struct gnssd_config, n), 0 }
 #define D(n) { #n, K_DBL, offsetof(struct gnssd_config, n), 0 }
 #define B(n) { #n, K_BOOL, offsetof(struct gnssd_config, n), 0 }
+#define M(n) { #n, K_MODE, offsetof(struct gnssd_config, n), 0 }
 
 static const struct key keys[] = {
     S(device), U(baud), D(stale_s), D(watchdog_s), B(watchdog_reset), U(reset_after_reopens),
     D(reset_min_interval_s), S(reset_chip), I(reset_line), U(reset_ms), D(position_interval_s),
     S(pty_link),
     { "socket", K_STR, offsetof(struct gnssd_config, socket_path), sizeof(((struct gnssd_config *)0)->socket_path) },
-    S(feed_group), B(send_command),
+    S(feed_group), B(send_command), M(time_sync), D(time_sync_threshold_s), D(time_sync_delay_ms),
+    S(rtc_device),
 };
 
 static char *trim(char *s)
@@ -92,6 +105,14 @@ static int set_value(struct gnssd_config *c, const struct key *k, const char *v)
         else
             return -1;
         return 0;
+    case K_MODE:
+        for (int i = 0; i <= TS_ALWAYS; i++)
+            if (!strcasecmp(v, ts_modes[i]))
+            {
+                *(int *)p = i;
+                return 0;
+            }
+        return -1;
     }
     return -1;
 }

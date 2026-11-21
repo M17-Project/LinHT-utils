@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "config.h"
 #include "nmea.h"
@@ -25,6 +26,36 @@ struct core_ops
     int (*write)(void *ctx, const char *buf, size_t n);
     int (*reset)(void *ctx);                        // RESET_N pulse, -ENOTSUP without a line
     void (*forward)(void *ctx, const char *line, size_t n);  // valid sentence with CR LF
+
+    // System clock and RTC, NULL = no time sync. The tests pass fakes.
+    int (*realtime)(void *ctx, struct timespec *ts);            // CLOCK_REALTIME
+    int (*set_realtime)(void *ctx, const struct timespec *ts);  // 0 or -errno
+    // Writes the system time minus `offset` to the RTC at its next whole
+    // second and returns that second in *written. 0 or -errno.
+    int (*rtc_write)(void *ctx, double offset, time_t *written);
+    int (*ntp_synced)(void *ctx);                               // 1 = NTP keeps the clock
+};
+
+#define TS_SAMPLES       5      // RMC epochs in a row that must agree
+#define TS_AGREE_S       0.2    // GNSS time minus monotonic time, allowed change
+#define TS_MIN_SATS      4
+#define TS_RTC_PERIOD_S  3600.0 // RTC write without a step at most this often
+#define TS_RETRY_S       600.0  // after a failed step
+#define TS_WARN_PERIOD_S 3600.0 // GNSS against NTP warning
+
+struct timesync
+{
+    int n;                          // valid samples in a row that agree
+    double offs[TS_SAMPLES];        // system clock minus GNSS, ring
+    int head;
+    double base;                    // GNSS time minus monotonic time, last sample
+    double last_sample;             // monotonic, 0 = never
+    double offset;                  // median of the last TS_SAMPLES, NaN = none
+    double last_rtc;                // monotonic, -1 = never
+    double next_step;               // no automatic step before this (after a failure)
+    double last_warn;               // -1 = never
+    unsigned steps, rtc_writes;
+    char last_sync[32];             // UTC of the last step or RTC write, empty = never
 };
 
 enum core_health { H_STARTING, H_OK, H_NO_DATA, H_TTY_BUSY, H_TTY_ERROR, H_STANDBY };
@@ -74,6 +105,8 @@ struct core
     int fix_prev, valid_prev;
     double last_pos;
     int fix_event, pos_event;       // set by core_update, cleared by the D-Bus layer
+
+    struct timesync ts;
 };
 
 extern int core_log_quiet;
@@ -106,6 +139,28 @@ int core_raw(struct core *c, const char *cmd, double now);       // collects $P 
 void core_pend_clear(struct core *c);
 
 double core_stale(const struct core *c);
+
+// --- Time sync (timesync.c) ---
+
+// Seconds since 1970 from RMC ddmmyy and hhmmss.sss, -1 when malformed.
+// *year gets the four digit year.
+double ts_gnss_time(const char *date, const char *time, int *year);
+// Year of the build, from __DATE__. Earlier GNSS dates are rejected (a
+// receiver without time counts from 1980, a GPS week rollover goes back
+// 19.6 years).
+int ts_build_year(void);
+void ts_init(struct timesync *t);
+// Called for each RMC sentence (`len` without CR LF), after the snapshot of
+// the previous epoch.
+void ts_rmc(struct core *c, size_t len, double now);
+// 1 when TS_SAMPLES valid epochs in a row agree and the last one is fresh.
+int ts_stable(const struct core *c, double now);
+// SyncTimeNow: steps the clock (unless NTP keeps it in auto or off mode)
+// and writes the RTC. Ignores the threshold and time_sync = off.
+// 0 with *stepped, -ENODATA without a stable fix, -EALREADY when NTP keeps
+// the clock and it differs from GNSS by more than the threshold, or the
+// -errno of the step.
+int ts_sync_now(struct core *c, double now, int *stepped);
 const char *core_health_name(enum core_health h);
 const char *core_power_name(enum core_power p);
 

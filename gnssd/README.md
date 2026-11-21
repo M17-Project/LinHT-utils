@@ -12,7 +12,9 @@ What it does:
 - watches the NMEA stream. Without valid NMEA for 10 s it opens the tty
   again, and after three such reopens in a row it pulses RESET_N,
 - passes every valid sentence on to other readers through a pty and a unix
-  socket, so gpsd or the FART field logger still get raw NMEA.
+  socket, so gpsd or the FART field logger still get raw NMEA,
+- sets the system clock and the battery-backed RTC (`/dev/rtc1`) from GNSS,
+  see Time sync.
 
 ## Build and test
 
@@ -30,7 +32,8 @@ The tests feed recorded sentences: an epoch without a fix from Rev C and
 Rev B (indoors, 2026-11-20), a 3D fix with GSV and C/N0 from the examples of
 the Quectel protocol specification, the replies of the receiver and broken
 input. The core tests drive the watchdog, the commands and the signals with
-a fake receiver and a fake clock.
+a fake receiver and a fake clock. The time sync tests use a fake system
+clock and a fake RTC.
 
 ## Files
 
@@ -61,6 +64,10 @@ file or key keeps the default.
 | `pty_link`, `socket` | see Files | pass-through, empty turns a part off |
 | `feed_group` | `dialout` | group of the pty and the socket, mode 0660, like `/dev/ttyLP2` |
 | `send_command` | `off` | `SendCommand` allowed (root only) |
+| `time_sync` | `auto` | `auto`, `off` or `always`, see Time sync |
+| `time_sync_threshold_s` | 2 | s, a larger offset steps the system clock |
+| `time_sync_delay_ms` | 0 | ms from the start of the second to the first byte of RMC, see Time sync |
+| `rtc_device` | `/dev/rtc1` | battery-backed RTC, empty turns the RTC writes off |
 
 ## D-Bus API
 
@@ -79,12 +86,16 @@ org.m17project.linht.Gnss1
 | `Wake()` | Sends one command (the version query), which ends the standby, and returns at the first RMC or GGA. |
 | `Restart(s mode)` | `hot`, `warm`, `cold`, `full-cold` (`$PMTK101` to `$PMTK104`, no ACK by design) or `reset` (RESET_N pulse). `full-cold` also resets the configuration to factory values. |
 | `SetUpdateRate(u milliseconds)` | `$PMTK220`, 1000 to 10000 ms in whole seconds, returns after the ACK. Faster rates do not fit through 9600 baud and are refused. |
+| `SyncTimeNow() -> (d offset, b stepped)` | Steps the system clock to the GNSS time and writes the RTC now, also below the threshold and with `time_sync = off`. Root only. In `auto` and `off` mode a clock kept by NTP is not stepped, only the RTC is written. `offset` is the system clock minus GNSS before the call. |
 | `SendCommand(s command) -> (as replies)` | Raw command for experiments, for example `PMTK414`. `$` and the checksum are added when missing. Returns the `$P...` sentences of the next 1.5 s. Root only, and only with `send_command = on`. The daemon does not track what the command changes. |
 
 Errors: `org.m17project.linht.Gnss1.Error.Busy` (another command waits),
 `.InvalidArgument`, `.NotSupported` (no reset line), `.NotOpen` (tty not
 open), `.Timeout` (no ACK or no NMEA), `.Rejected` (PMTK001 flag 0 or 1),
-`.Failed` (PMTK001 flag 2), `.Disabled` (`send_command = off`).
+`.Failed` (PMTK001 flag 2 or a failed clock step), `.Disabled`
+(`send_command = off`), `.NoFix` (no stable GNSS time for `SyncTimeNow`),
+`.NtpSynchronized` (NTP keeps the clock and it differs from GNSS by more
+than the threshold).
 
 The standby does not survive a restart of the daemon: every open of the tty
 sends the version queries, which wake the module.
@@ -102,6 +113,7 @@ All are read only. The first table sends `PropertiesChanged`.
 | `AntennaStatus` | s | text after `ANTSTATUS=` in `$GPTXT`, see Antenna status |
 | `ModuleVersion` | s | `$PQVERNO` and `$PMTK705` replies |
 | `TimeValid` | b | RMC status A |
+| `LastTimeSync` | s | UTC of the last clock step or RTC write, empty = never |
 
 Values, poll them with `GetAll` every 1 to 5 s:
 
@@ -125,6 +137,8 @@ Values, poll them with `GetAll` every 1 to 5 s:
 | `Reopens`, `Resets` | u | watchdog reopens and RESET_N pulses since the start |
 | `Device`, `NmeaPty`, `NmeaSocket` | s | paths |
 | `NmeaDropped` | u | lines a slow socket reader did not get |
+| `TimeSyncMode` | s | `auto`, `off`, `always` |
+| `TimeSyncOffsetSec` | d | last measured system clock minus GNSS time (positive = system clock ahead), NaN before the first stable fix. Not reset by a step |
 
 C/N0 is the carrier to noise density of each satellite in dB-Hz, not a
 signal level in dBm. Outdoors with a working antenna the best satellites
@@ -142,8 +156,8 @@ values to look at when the receiver gets no fix.
 
 Only root owns the name. Everyone reads the properties. Root and the group
 `plugdev` (the `linht` user is in it) call `Standby`, `Wake`, `Restart` and
-`SetUpdateRate`. `SendCommand` is for root only, in the D-Bus policy and
-again in the daemon.
+`SetUpdateRate`. `SendCommand` and `SyncTimeNow` are for root only, in the
+D-Bus policy and again in the daemon.
 
 ### busctl examples
 
@@ -159,6 +173,7 @@ busctl --system call $B Wake
 busctl --system call $B Restart s cold
 busctl --system call $B SetUpdateRate u 2000
 busctl --system call $B SendCommand s PMTK414
+busctl --system call $B SyncTimeNow
 busctl --system monitor org.m17project.linht.Gnss1
 ```
 
@@ -174,6 +189,7 @@ linht-gnssd wake
 linht-gnssd restart cold      # hot, warm, cold, full-cold, reset
 linht-gnssd rate 1000
 linht-gnssd send PMTK605      # prints the replies, root only
+linht-gnssd sync-time         # SyncTimeNow, root only
 ```
 
 ## NMEA pass-through
@@ -197,6 +213,64 @@ receiver.
 The field logger should later read the D-Bus properties instead of the tty
 or the pty. That gives it the C/N0, the satellites in view and the health of
 the receiver without its own NMEA parser.
+
+## Time sync
+
+LinHT has two RTCs. The kernel uses `rtc0`, the BBNSM of the i.MX93, which
+has no backup supply. `rtc1` is the AB1805 on the SoM with the backup
+supply, and `rtc1-hctosys.service` sets the system clock from it at boot.
+Nothing else sets `rtc1`, so the daemon keeps it right from GNSS.
+
+The receiver time counts only with a stable fix: RMC status A, a 3D fix
+with at least 4 satellites, a year not before the build year of the daemon,
+and 5 epochs in a row in which the receiver time runs with the monotonic
+clock (within 0.2 s). A receiver without time reports 1980-01-06 and a GPS
+week rollover goes back 19.6 years, both are below the build year. The
+offset is the median of the last 5 epochs.
+
+With a stable fix, every epoch:
+
+- `auto`: when the offset is above `time_sync_threshold_s`, the system clock
+  is stepped (`clock_settime`) and `rtc1` is written. Otherwise `rtc1` is
+  written once at the first stable fix and then at most once per hour. When
+  NTP keeps the clock (the test of `timedatectl` NTPSynchronized, an
+  `adjtimex` maximum error below 16 s, with systemd-timesyncd or chrony),
+  the clock is never stepped. `rtc1` is then written hourly as long as GNSS
+  and the clock agree within the threshold, otherwise a warning is logged
+  once per hour and nothing is written.
+- `always`: as `auto`, but NTP is ignored.
+- `off`: only `TimeSyncOffsetSec` is measured. `SyncTimeNow` still works.
+
+A failed step (no `CAP_SYS_TIME`) is tried again after 10 minutes. Each
+step and each RTC write goes to the journal:
+
+```
+system clock stepped by +3600.079 s from GNSS, 2026-11-21T07:48:20Z -> 2026-11-21T08:48:20Z
+/dev/rtc1 set to 2026-11-21T08:48:21Z from GNSS (after the step)
+```
+
+`rtc1` counts whole seconds and its driver clears the hundredths when it
+is written, so the daemon waits for the next whole second before the write
+(up to 1 s, once per hour). The daemon runs as root, which gives it
+`CAP_SYS_TIME` for both.
+
+### Accuracy without 1PPS
+
+The 1PPS line of the module is not used, so the time comes from the NMEA
+second boundary. The RMC time is the start of the epoch, and RMC is the
+first sentence of the epoch. The daemon takes the system time when the
+RMC line is complete and subtracts the time of the line on the wire (76
+characters at 9600 baud are 79 ms) and `time_sync_delay_ms`, the delay of
+the receiver from the start of the second to its first byte.
+
+That delay is not measured yet, so it is 0 and the system clock ends up
+late by the delay. Expect an error up to about 0.5 s. On Rev C indoors
+(2026-11-21) the RMC arrived 0.58 to 0.61 s after the second of the system
+clock, a spread of 30 ms, but the receiver had no valid time then, so this
+gives the jitter and not the delay. To measure it, run the unit outdoors
+with NTP synchronised and `time_sync_delay_ms = 0`: `TimeSyncOffsetSec` is
+then the delay in seconds. Put it into `time_sync_delay_ms`. For better
+than a few milliseconds the 1PPS on GPIO4_IO08 would be needed.
 
 ## Receiver commands
 
@@ -246,7 +320,7 @@ From the LinHT netlist and the device tree (`sbc-mcm-imx93.dtsi`):
   pin, and the line reads high on both units. Whether that keeps the pin
   above 1.4 V against the internal pull-down of the module was not
   measured.
-- 1PPS on SoM pin 87, GPIO4_IO08. Not used by the daemon.
+- 1PPS on SoM pin 87, GPIO4_IO08. Not used by the daemon, see Time sync.
 - ANT_DET, ANT_SHORT and ANT_OFF are not connected.
 
 ### Antenna status
@@ -267,3 +341,7 @@ Not part of `make test`:
 - Standby current: battery current from `linht-chargerd` with and without
   `linht-gnssd standby`, on battery.
 - gpsd on the pty: `gpsd -N -n -b /run/linht-gnssd/nmea` and `cgps`.
+- Time sync outdoors: set the system clock 1 h wrong (`date -s`), wait for
+  the fix, check the journal for one step and one `rtc1` write, then
+  `hwclock -r -f /dev/rtc1` and `TimeSyncOffsetSec` near 0. Measure
+  `time_sync_delay_ms` as in Accuracy without 1PPS.

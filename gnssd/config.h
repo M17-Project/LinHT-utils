@@ -27,7 +27,15 @@ struct gnssd_config
     char feed_group[32];            // group of the pty and the socket
 
     int send_command;               // 1 = SendCommand allowed (root only)
+
+    int time_sync;                  // enum time_sync_mode
+    double time_sync_threshold_s;   // step the system clock above this offset
+    double time_sync_delay_ms;      // receiver output delay, start of the second to the first RMC byte
+    char rtc_device[32];            // battery-backed RTC, empty = no RTC writes
 };
+
+enum time_sync_mode { TS_AUTO, TS_OFF, TS_ALWAYS };
+const char *time_sync_mode_name(int mode);
 
 void config_defaults(struct gnssd_config *c);
 

@@ -4,9 +4,12 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <linux/gpio.h>
+#include <linux/rtc.h>
+#include <math.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/timex.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -108,4 +111,46 @@ int gpio_pulse_low(const char *chip, int line, unsigned ms)
     close(req.fd);
     close(cfd);
     return r;
+}
+
+int rtc_set_from_system(const char *dev, double offset, time_t *written)
+{
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -errno;
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    double t = now.tv_sec + now.tv_nsec * 1e-9 - offset;
+    double next = floor(t) + 1;
+    double wait = next - t;
+    struct timespec ts = { (time_t)wait, (long)((wait - floor(wait)) * 1e9) };
+    while (nanosleep(&ts, &ts) < 0 && errno == EINTR)
+        ;
+    time_t sec = (time_t)next;
+    struct tm tm;
+    gmtime_r(&sec, &tm);
+    struct rtc_time rt;
+    memset(&rt, 0, sizeof(rt));
+    rt.tm_sec = tm.tm_sec;
+    rt.tm_min = tm.tm_min;
+    rt.tm_hour = tm.tm_hour;
+    rt.tm_mday = tm.tm_mday;
+    rt.tm_mon = tm.tm_mon;
+    rt.tm_year = tm.tm_year;
+    rt.tm_wday = tm.tm_wday;
+    rt.tm_yday = tm.tm_yday;
+    int r = ioctl(fd, RTC_SET_TIME, &rt) < 0 ? -errno : 0;
+    close(fd);
+    if (r == 0 && written)
+        *written = sec;
+    return r;
+}
+
+int clock_ntp_synced(void)
+{
+    struct timex tx;
+    memset(&tx, 0, sizeof(tx));
+    if (adjtimex(&tx) < 0)
+        return 0;
+    return tx.maxerror < 16000000;
 }

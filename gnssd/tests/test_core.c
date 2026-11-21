@@ -54,7 +54,9 @@ static void f_forward(void *ctx, const char *line, size_t n)
     F.forwarded++;
 }
 
-static const struct core_ops fops = { f_open, f_close, f_write, f_reset, f_forward };
+static const struct core_ops fops = {
+    .open = f_open, .close = f_close, .write = f_write, .reset = f_reset, .forward = f_forward,
+};
 
 static void setup(struct core *c)
 {
