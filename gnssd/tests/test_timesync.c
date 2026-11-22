@@ -149,7 +149,7 @@ static void test_gnss_time(void)
 static void test_no_fix(void)
 {
     struct core c;
-    int stepped;
+    int stepped, wrote;
 
     // Rev C indoors: RMC V with a date from the receiver RTC.
     setup(&c, 100);
@@ -165,7 +165,7 @@ static void test_no_fix(void)
         core_update(&c, t);
     }
     CHECK(T.sets == 0 && T.rtc == 0 && isnan(c.ts.offset));
-    CHECK(ts_sync_now(&c, 30, &stepped) == -ENODATA && !stepped && T.sets == 0);
+    CHECK(ts_sync_now(&c, 30, &stepped, &wrote) == -ENODATA && !stepped && T.sets == 0);
 
     // RMC A, but only a 2D fix, or a 3D fix with 3 satellites.
     setup(&c, 100);
@@ -174,13 +174,13 @@ static void test_no_fix(void)
     setup(&c, 100);
     run(&c, 1, 30, 1, 3, 3, 0);
     CHECK(c.snap.fix == 3 && T.sets == 0 && T.rtc == 0);
-    CHECK(ts_sync_now(&c, 30, &stepped) == -ENODATA);
+    CHECK(ts_sync_now(&c, 30, &stepped, &wrote) == -ENODATA);
 }
 
 static void test_bad_dates(void)
 {
     struct core c;
-    int stepped;
+    int stepped, wrote;
 
     // A receiver that reports 1980 (GPS epoch, no time yet) with status A
     // and a 3D fix: never a step, the system clock would go back 46 years.
@@ -188,7 +188,7 @@ static void test_bad_dates(void)
     double back = g0 - 315964800.0;
     run(&c, 1, 30, 1, 3, 8, -back);
     CHECK(!strncmp(c.snap.utc, "1980-", 5));
-    CHECK(T.sets == 0 && T.rtc == 0 && ts_sync_now(&c, 30, &stepped) == -ENODATA);
+    CHECK(T.sets == 0 && T.rtc == 0 && ts_sync_now(&c, 30, &stepped, &wrote) == -ENODATA);
 
     // GPS week rollover: 1024 weeks back.
     setup(&c, 0);
@@ -220,7 +220,7 @@ static void test_bad_dates(void)
 static void test_step(void)
 {
     struct core c;
-    int stepped;
+    int stepped, wrote;
 
     // System clock one hour behind: no step before 5 agreeing epochs.
     setup(&c, -3600);
@@ -272,7 +272,7 @@ static void test_step(void)
     T.set_rc = 0;
     CHECK(ts_stable(&c, 10));
     run(&c, 11, 11, 0, 1, 0, 0);
-    CHECK(!ts_stable(&c, 11) && ts_sync_now(&c, 11, &stepped) == -ENODATA);
+    CHECK(!ts_stable(&c, 11) && ts_sync_now(&c, 11, &stepped, &wrote) == -ENODATA);
     // NMEA stops: stale after 5 s.
     setup(&c, 0.5);
     run(&c, 1, 10, 1, 3, 8, 0);
@@ -309,14 +309,14 @@ static void test_small_offset(void)
 static void test_ntp(void)
 {
     struct core c;
-    int stepped;
+    int stepped, wrote;
 
     // NTP keeps the clock: the RTC is written, the clock is not touched.
     setup(&c, 0.3);
     T.ntp = 1;
     run(&c, 1, 20, 1, 3, 8, 0);
     CHECK(T.sets == 0 && T.rtc == 1);
-    CHECK(ts_sync_now(&c, 20, &stepped) == 0 && !stepped && T.rtc == 2);
+    CHECK(ts_sync_now(&c, 20, &stepped, &wrote) == 0 && !stepped && T.rtc == 2);
 
     // NTP and GNSS disagree: neither a step nor an RTC write.
     setup(&c, -3600);
@@ -324,50 +324,131 @@ static void test_ntp(void)
     run(&c, 1, 20, 1, 3, 8, 0);
     CHECK(T.sets == 0 && T.rtc == 0);
     CHECK_NEAR(c.ts.offset, -3600 - WIRE, 0.01);
-    CHECK(ts_sync_now(&c, 20, &stepped) == -EALREADY && T.sets == 0);
+    CHECK(ts_sync_now(&c, 20, &stepped, &wrote) == -EALREADY && T.sets == 0);
 
-    // time_sync = always steps also against NTP.
+    // system_clock = always steps also against NTP.
     setup(&c, -3600);
     T.ntp = 1;
-    c.cfg.time_sync = TS_ALWAYS;
+    c.cfg.system_clock = SC_ALWAYS;
     run(&c, 1, 20, 1, 3, 8, 0);
     CHECK(T.sets == 1 && T.rtc == 1);
-
-    // time_sync = off: the offset is measured, nothing is set, but
-    // SyncTimeNow still works.
-    setup(&c, -3600);
-    c.cfg.time_sync = TS_OFF;
-    run(&c, 1, 20, 1, 3, 8, 0);
-    CHECK(T.sets == 0 && T.rtc == 0 && !isnan(c.ts.offset));
-    CHECK(ts_sync_now(&c, 20, &stepped) == 0 && stepped && T.sets == 1 && T.rtc == 1);
-    // A small offset is stepped too when asked for.
-    setup(&c, 0.5);
-    run(&c, 1, 20, 1, 3, 8, 0);
-    CHECK(ts_sync_now(&c, 20, &stepped) == 0 && stepped && T.sets == 1 && T.rtc == 2);
 }
 
-static void test_ts_config(void)
+// Every combination of system_clock, rtc, NTP and the offset: what the
+// daemon does by itself in 20 s of a stable fix, then what SyncTimeNow does.
+static void test_modes(void)
+{
+    enum { SMALL, BIG };
+    enum { NONE = -99 };            // SyncTimeNow not checked (after a step)
+    static const struct
+    {
+        int mode, rtc, ntp, offset;
+        int sets, rtcs;             // after 20 s
+        int rc, stepped, wrote;     // SyncTimeNow
+    } cases[] = {
+        // mode     rtc ntp offset  sets rtcs  rc          stepped wrote
+        { SC_AUTO,   1, 0, SMALL,   0, 1,     0,          1, 1 },
+        { SC_AUTO,   0, 0, SMALL,   0, 0,     0,          1, 0 },
+        { SC_AUTO,   1, 0, BIG,     1, 1,     NONE,       0, 0 },
+        { SC_AUTO,   0, 0, BIG,     1, 0,     NONE,       0, 0 },
+        { SC_AUTO,   1, 1, SMALL,   0, 1,     0,          0, 1 },
+        { SC_AUTO,   0, 1, SMALL,   0, 0,     0,          0, 0 },
+        { SC_AUTO,   1, 1, BIG,     0, 0,     -EALREADY,  0, 0 },
+        { SC_AUTO,   0, 1, BIG,     0, 0,     -EALREADY,  0, 0 },
+        { SC_ALWAYS, 1, 0, SMALL,   0, 1,     0,          1, 1 },
+        { SC_ALWAYS, 0, 0, SMALL,   0, 0,     0,          1, 0 },
+        { SC_ALWAYS, 1, 0, BIG,     1, 1,     NONE,       0, 0 },
+        { SC_ALWAYS, 0, 0, BIG,     1, 0,     NONE,       0, 0 },
+        { SC_ALWAYS, 1, 1, SMALL,   0, 1,     0,          1, 1 },
+        { SC_ALWAYS, 0, 1, SMALL,   0, 0,     0,          1, 0 },
+        { SC_ALWAYS, 1, 1, BIG,     1, 1,     NONE,       0, 0 },
+        { SC_ALWAYS, 0, 1, BIG,     1, 0,     NONE,       0, 0 },
+        { SC_OFF,    1, 0, SMALL,   0, 1,     0,          0, 1 },
+        { SC_OFF,    0, 0, SMALL,   0, 0,     -EPERM,     0, 0 },
+        { SC_OFF,    1, 0, BIG,     0, 1,     0,          0, 1 },
+        { SC_OFF,    0, 0, BIG,     0, 0,     -EPERM,     0, 0 },
+        { SC_OFF,    1, 1, SMALL,   0, 1,     0,          0, 1 },
+        { SC_OFF,    0, 1, SMALL,   0, 0,     -EPERM,     0, 0 },
+        { SC_OFF,    1, 1, BIG,     0, 0,     -EALREADY,  0, 0 },
+        { SC_OFF,    0, 1, BIG,     0, 0,     -EPERM,     0, 0 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        struct core c;
+        int stepped, wrote;
+        setup(&c, cases[i].offset == BIG ? -3600 : 0.5);
+        T.ntp = cases[i].ntp;
+        c.cfg.system_clock = cases[i].mode;
+        c.cfg.rtc = cases[i].rtc;
+        run(&c, 1, 20, 1, 3, 8, 0);
+        int ok = T.sets == cases[i].sets && T.rtc == cases[i].rtcs && !isnan(c.ts.offset);
+        // The RTC gets the GNSS time, also when the system clock is not set.
+        if (ok && T.rtc)
+            ok = fabs(T.rtc_value - (g0 + 6 + WIRE)) < 0.01;
+        if (ok && cases[i].rc != NONE)
+        {
+            int sets = T.sets, rtcs = T.rtc;
+            int rc = ts_sync_now(&c, 20, &stepped, &wrote);
+            ok = rc == cases[i].rc && stepped == cases[i].stepped && wrote == cases[i].wrote &&
+                 T.sets - sets == cases[i].stepped && T.rtc - rtcs == cases[i].wrote;
+        }
+        if (!ok)
+            fprintf(stderr, "  case %zu: %s rtc %d ntp %d %s: %d sets, %d RTC writes\n", i,
+                    system_clock_mode_name(cases[i].mode), cases[i].rtc, cases[i].ntp,
+                    cases[i].offset == BIG ? "big" : "small", T.sets, T.rtc);
+        CHECK(ok);
+    }
+
+    // rtc = on without rtc_device: nothing written, SyncTimeNow says so.
+    struct core c;
+    int stepped, wrote;
+    setup(&c, 0.5);
+    c.cfg.system_clock = SC_OFF;
+    c.cfg.rtc_device[0] = 0;
+    run(&c, 1, 20, 1, 3, 8, 0);
+    CHECK(T.sets == 0 && T.rtc == 0);
+    CHECK(ts_sync_now(&c, 20, &stepped, &wrote) == 0 && !stepped && !wrote);
+
+    // Both off: SyncTimeNow refuses also without a fix.
+    setup(&c, 0.5);
+    c.cfg.system_clock = SC_OFF;
+    c.cfg.rtc = 0;
+    CHECK(ts_sync_now(&c, 0, &stepped, &wrote) == -EPERM);
+}
+
+static int load(struct gnssd_config *c, const char *text)
 {
     char path[] = "/tmp/gnssd-test-XXXXXX";
     int fd = mkstemp(path);
     CHECK(fd >= 0);
-    const char *text = "time_sync = always\ntime_sync_threshold_s = 5\nrtc_device =\n";
     CHECK(write(fd, text, strlen(text)) == (ssize_t)strlen(text));
     close(fd);
+    config_defaults(c);
+    int rc = config_load(c, path);
+    unlink(path);
+    return rc;
+}
+
+static void test_ts_config(void)
+{
     struct gnssd_config c;
     config_defaults(&c);
-    CHECK(c.time_sync == TS_AUTO && c.time_sync_threshold_s == 2 && c.time_sync_delay_ms == 125 &&
-          !strcmp(c.rtc_device, "/dev/rtc1"));
-    CHECK(config_load(&c, path) == 0);
-    CHECK(c.time_sync == TS_ALWAYS && c.time_sync_threshold_s == 5 && !c.rtc_device[0]);
-    CHECK(!strcmp(time_sync_mode_name(c.time_sync), "always"));
+    CHECK(c.system_clock == SC_AUTO && c.rtc == 1 && c.time_sync_threshold_s == 2 &&
+          c.time_sync_delay_ms == 125 && !strcmp(c.rtc_device, "/dev/rtc1"));
 
-    FILE *f = fopen(path, "w");
-    fputs("time_sync = sometimes\n", f);
-    fclose(f);
+    CHECK(load(&c, "system_clock = always\nrtc = off\ntime_sync_threshold_s = 5\nrtc_device =\n") == 0);
+    CHECK(c.system_clock == SC_ALWAYS && c.rtc == 0 && c.time_sync_threshold_s == 5 &&
+          !c.rtc_device[0]);
+    CHECK(!strcmp(system_clock_mode_name(c.system_clock), "always"));
+    CHECK(load(&c, "system_clock = off\n") == 0 && c.system_clock == SC_OFF && c.rtc == 1);
+    CHECK(load(&c, "rtc = off\n") == 0 && c.system_clock == SC_AUTO && c.rtc == 0);
+
+    CHECK(load(&c, "system_clock = always\nsystem_clock = off\n") == 0 && c.system_clock == SC_OFF);
+
     core_log_quiet = 1;
-    CHECK(config_load(&c, path) == -1);
-    unlink(path);
+    CHECK(load(&c, "system_clock = on\n") == -1);
+    CHECK(load(&c, "rtc = /dev/rtc1\n") == -1);
 }
 
 void test_timesync(void)
@@ -379,4 +460,5 @@ void test_timesync(void)
     test_step();
     test_small_offset();
     test_ntp();
+    test_modes();
 }

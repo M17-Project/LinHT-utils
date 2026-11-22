@@ -14,7 +14,7 @@ What it does:
 - passes every valid sentence on to other readers through a pty and a unix
   socket, so gpsd or the FART field logger still get raw NMEA,
 - sets the system clock and the battery-backed RTC (`/dev/rtc1`) from GNSS,
-  see Time sync.
+  two separate choices, see Time sync.
 
 ## Build and test
 
@@ -64,10 +64,11 @@ file or key keeps the default.
 | `pty_link`, `socket` | see Files | pass-through, empty turns a part off |
 | `feed_group` | `dialout` | group of the pty and the socket, mode 0660, like `/dev/ttyLP2` |
 | `send_command` | `off` | `SendCommand` allowed (root only) |
-| `time_sync` | `auto` | `auto`, `off` or `always`, see Time sync |
+| `system_clock` | `auto` | `auto`, `off` or `always`: whether the daemon steps the system clock, see Time sync |
+| `rtc` | `on` | `on` or `off`: whether the daemon writes `rtc_device`, see Time sync |
 | `time_sync_threshold_s` | 2 | s, a larger offset steps the system clock |
 | `time_sync_delay_ms` | 125 | ms from the start of the second to the first byte of RMC, see Time sync |
-| `rtc_device` | `/dev/rtc1` | battery-backed RTC, empty turns the RTC writes off |
+| `rtc_device` | `/dev/rtc1` | battery-backed RTC, empty also turns the RTC writes off |
 
 ## D-Bus API
 
@@ -86,14 +87,15 @@ org.m17project.linht.Gnss1
 | `Wake()` | Sends one command (the version query), which ends the standby, and returns at the first RMC or GGA. |
 | `Restart(s mode)` | `hot`, `warm`, `cold`, `full-cold` (`$PMTK101` to `$PMTK104`, no ACK by design) or `reset` (RESET_N pulse). `full-cold` also resets the configuration to factory values. |
 | `SetUpdateRate(u milliseconds)` | `$PMTK220`, 1000 to 10000 ms in whole seconds, returns after the ACK. Faster rates do not fit through 9600 baud and are refused. |
-| `SyncTimeNow() -> (d offset, b stepped)` | Steps the system clock to the GNSS time and writes the RTC now, also below the threshold and with `time_sync = off`. Root only. In `auto` and `off` mode a clock kept by NTP is not stepped, only the RTC is written. `offset` is the system clock minus GNSS before the call. |
+| `SyncTimeNow() -> (d offset, b stepped, b rtc_written)` | Does now what `system_clock` and `rtc` allow, also below the threshold and before the hourly RTC write is due. Root only. See SyncTimeNow below. `offset` is the system clock minus GNSS before the call. |
 | `SendCommand(s command) -> (as replies)` | Raw command for experiments, for example `PMTK414`. `$` and the checksum are added when missing. Returns the `$P...` sentences of the next 1.5 s. Root only, and only with `send_command = on`. The daemon does not track what the command changes. |
 
 Errors: `org.m17project.linht.Gnss1.Error.Busy` (another command waits),
 `.InvalidArgument`, `.NotSupported` (no reset line), `.NotOpen` (tty not
 open), `.Timeout` (no ACK or no NMEA), `.Rejected` (PMTK001 flag 0 or 1),
 `.Failed` (PMTK001 flag 2 or a failed clock step), `.Disabled`
-(`send_command = off`), `.NoFix` (no stable GNSS time for `SyncTimeNow`),
+(`send_command = off`, or `SyncTimeNow` with `system_clock = off` and
+`rtc = off`), `.NoFix` (no stable GNSS time for `SyncTimeNow`),
 `.NtpSynchronized` (NTP keeps the clock and it differs from GNSS by more
 than the threshold).
 
@@ -137,7 +139,8 @@ Values, poll them with `GetAll` every 1 to 5 s:
 | `Reopens`, `Resets` | u | watchdog reopens and RESET_N pulses since the start |
 | `Device`, `NmeaPty`, `NmeaSocket` | s | paths |
 | `NmeaDropped` | u | lines a slow socket reader did not get |
-| `TimeSyncMode` | s | `auto`, `off`, `always` |
+| `SystemClockMode` | s | `system_clock`: `auto`, `off`, `always` |
+| `RtcSync` | b | `rtc = on` and `rtc_device` not empty |
 | `TimeSyncOffsetSec` | d | last measured system clock minus GNSS time (positive = system clock ahead), NaN before the first stable fix. Not reset by a step |
 
 C/N0 is the carrier to noise density of each satellite in dB-Hz, not a
@@ -217,9 +220,15 @@ the receiver without its own NMEA parser.
 ## Time sync
 
 LinHT has two RTCs. The kernel uses `rtc0`, the BBNSM of the i.MX93, which
-has no backup supply. `rtc1` is the AB1805 on the SoM with the backup
-supply, and `rtc1-hctosys.service` sets the system clock from it at boot.
-Nothing else sets `rtc1`, so the daemon keeps it right from GNSS.
+has no backup supply. `rtc1` is the AB1805 on the SoM. Its backup supply
+is `VCC_RTC` (SoM pin 127) on `+3.3VP`, the MCP1703A that runs from the
+battery pack (`+BATT`) and is always on. There is no coin cell, so the
+AB1805 keeps the time while a charged pack is in the unit and loses it when
+the pack is out or empty. Its driver then logs "Oscillator failure, data
+is invalid" and refuses every read until the next write.
+`rtc1-hctosys.service` sets the system clock from `rtc1` at boot. Nothing
+else sets `rtc1`, so the daemon keeps it right from GNSS. When the AB1805
+has lost its time, the first stable fix sets the system clock and `rtc1`.
 
 The receiver time counts only with a stable fix: RMC status A, a 3D fix
 with at least 4 satellites, a year not before the build year of the daemon,
@@ -228,18 +237,36 @@ clock (within 0.2 s). A receiver without time reports 1980-01-06 and a GPS
 week rollover goes back 19.6 years, both are below the build year. The
 offset is the median of the last 5 epochs.
 
-With a stable fix, every epoch:
+Two keys decide what the daemon does with a stable fix. Each one is a
+separate choice of the operator:
 
-- `auto`: when the offset is above `time_sync_threshold_s`, the system clock
-  is stepped (`clock_settime`) and `rtc1` is written. Otherwise `rtc1` is
-  written once at the first stable fix and then at most once per hour. When
-  NTP keeps the clock (the test of `timedatectl` NTPSynchronized, an
-  `adjtimex` maximum error below 16 s, with systemd-timesyncd or chrony),
-  the clock is never stepped. `rtc1` is then written hourly as long as GNSS
-  and the clock agree within the threshold, otherwise a warning is logged
-  once per hour and nothing is written.
-- `always`: as `auto`, but NTP is ignored.
-- `off`: only `TimeSyncOffsetSec` is measured. `SyncTimeNow` still works.
+| `system_clock` | The system clock |
+|---|---|
+| `auto` | stepped (`clock_settime`) when the offset is above `time_sync_threshold_s`, unless NTP keeps the clock |
+| `always` | as `auto`, but NTP is ignored |
+| `off` | never stepped |
+
+| `rtc` | `rtc_device` |
+|---|---|
+| `on` | written with the GNSS time after each step, at the first stable fix, and then at most once per hour |
+| `off` | never written |
+
+"NTP keeps the clock" is the test of `timedatectl` NTPSynchronized, an
+`adjtimex` maximum error below 16 s, with systemd-timesyncd or chrony.
+When NTP keeps the clock and GNSS differs from it by more than the
+threshold, the daemon cannot tell which one is wrong. It then steps nothing
+and writes nothing, and logs a warning once per hour. With
+`system_clock = always` this case does not exist, the clock is stepped.
+
+`rtc = on` with `system_clock = off` writes the GNSS time to the RTC, not
+the system time, so the RTC is right also when the system clock is not.
+`TimeSyncOffsetSec` is measured in every mode.
+
+The defaults are `system_clock = auto` and `rtc = on`, so a fresh unit gets
+a valid clock at its first fix and keeps it over a power cycle. The LinHT
+image has no NTP client running and the unit is often without a network,
+so GNSS is the only time source. `auto` does not fight an NTP client on a
+unit that has one.
 
 A failed step (no `CAP_SYS_TIME`) is tried again after 10 minutes. Each
 step and each RTC write goes to the journal:
@@ -252,7 +279,31 @@ system clock stepped by -2.540 s from GNSS, 2026-11-21T08:56:01Z -> 2026-11-21T0
 `rtc1` counts whole seconds and its driver clears the hundredths when it
 is written, so the daemon waits for the next whole second before the write
 (up to 1 s, once per hour). The daemon runs as root, which gives it
-`CAP_SYS_TIME` for both.
+`CAP_SYS_TIME` for both. At start the journal shows both choices:
+
+```
+running, bus name org.m17project.linht.Gnss1, /dev/ttyLP2 at 9600 baud, system clock auto, RTC /dev/rtc1
+```
+
+### SyncTimeNow
+
+`SyncTimeNow` (`linht-gnssd sync-time`) does at once what the two keys
+allow, without the threshold and without waiting for the hourly RTC
+write. It needs a stable fix like the automatic sync.
+
+| `system_clock` | `rtc` | `SyncTimeNow` |
+|---|---|---|
+| `auto` | `on` | steps the clock (offset of 1 ms or more), writes the RTC. A clock kept by NTP is not stepped, only the RTC is written |
+| `auto` | `off` | steps the clock as above, no RTC write |
+| `always` | `on` | steps the clock also against NTP, writes the RTC |
+| `always` | `off` | steps the clock also against NTP, no RTC write |
+| `off` | `on` | writes the GNSS time to the RTC, no step |
+| `off` | `off` | refused with `.Disabled` |
+
+In `auto` and `off` mode, a clock kept by NTP that differs from GNSS by
+more than the threshold gives `.NtpSynchronized` and nothing changes.
+`stepped` and `rtc_written` tell what was done. `rtc_written` is false
+with an empty `rtc_device`.
 
 ### Accuracy without 1PPS
 

@@ -155,12 +155,14 @@ void ts_init(struct timesync *t);
 void ts_rmc(struct core *c, size_t len, double now);
 // 1 when TS_SAMPLES valid epochs in a row agree and the last one is fresh.
 int ts_stable(const struct core *c, double now);
-// SyncTimeNow: steps the clock (unless NTP keeps it in auto or off mode)
-// and writes the RTC. Ignores the threshold and time_sync = off.
-// 0 with *stepped, -ENODATA without a stable fix, -EALREADY when NTP keeps
-// the clock and it differs from GNSS by more than the threshold, or the
-// -errno of the step.
-int ts_sync_now(struct core *c, double now, int *stepped);
+// SyncTimeNow: does at once what system_clock and rtc allow, without the
+// threshold and the hourly RTC period. Steps the clock (system_clock auto
+// or always, in auto not against NTP) and writes the RTC (rtc = on).
+// 0 with *stepped and *rtc_written, -EPERM with system_clock = off and
+// rtc = off, -ENODATA without a stable fix, -EALREADY when NTP keeps the
+// clock (not in always mode) and it differs from GNSS by more than the
+// threshold, or the -errno of the step.
+int ts_sync_now(struct core *c, double now, int *stepped, int *rtc_written);
 const char *core_health_name(enum core_health h);
 const char *core_power_name(enum core_power p);
 

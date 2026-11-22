@@ -6,7 +6,7 @@
 //   linht-gnssd restart MODE         hot, warm, cold, full-cold or reset
 //   linht-gnssd rate MS              fix interval, 1000 to 10000 ms
 //   linht-gnssd send COMMAND         raw command, root and send_command = on
-//   linht-gnssd sync-time            system clock and rtc1 from GNSS now, root
+//   linht-gnssd sync-time            system clock and RTC from GNSS now, root
 
 #include <errno.h>
 #include <math.h>
@@ -266,8 +266,9 @@ static int daemon_run(void)
     }
     if (r >= 0)
     {
-        core_log(6, "running, bus name %s, %s at %u baud, time sync %s", GNSS_BUS_NAME,
-                 core.cfg.device, core.cfg.baud, time_sync_mode_name(core.cfg.time_sync));
+        core_log(6, "running, bus name %s, %s at %u baud, system clock %s, RTC %s", GNSS_BUS_NAME,
+                 core.cfg.device, core.cfg.baud, system_clock_mode_name(core.cfg.system_clock),
+                 core.cfg.rtc && core.cfg.rtc_device[0] ? core.cfg.rtc_device : "off");
         r = sd_event_loop(event);
     }
     else
@@ -497,9 +498,10 @@ static int call(const char *method, const char *sig, const char *arg, uint32_t n
     else if (!strcmp(method, "SyncTimeNow"))
     {
         double off;
-        int stepped;
-        if (sd_bus_message_read(reply, "db", &off, &stepped) > 0)
-            printf("offset %+.3f s, %s\n", off, stepped ? "system clock stepped" : "not stepped");
+        int stepped, rtc;
+        if (sd_bus_message_read(reply, "dbb", &off, &stepped, &rtc) > 0)
+            printf("offset %+.3f s, system clock %s, RTC %s\n", off,
+                   stepped ? "stepped" : "not stepped", rtc ? "written" : "not written");
     }
     sd_bus_error_free(&err);
     sd_bus_message_unref(reply);

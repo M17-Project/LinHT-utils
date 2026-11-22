@@ -158,19 +158,22 @@ static int step(struct core *c, double offset)
     return 0;
 }
 
-// What to do with a stable offset. `manual` is SyncTimeNow.
+// What to do with a stable offset. `manual` is SyncTimeNow: it skips the
+// threshold and the RTC period, but system_clock = off and rtc = off still
+// keep the daemon away from the clock and the RTC.
 static int act(struct core *c, double now, int manual, int *stepped)
 {
     struct timesync *t = &c->ts;
-    int mode = c->cfg.time_sync;
+    int mode = c->cfg.system_clock, rtc = c->cfg.rtc;
     double off = t->offset;
     *stepped = 0;
 
-    if (!manual && mode == TS_OFF)
+    if (mode == SC_OFF && !rtc)
         return 0;
-    int ntp = mode != TS_ALWAYS && c->ops->ntp_synced && c->ops->ntp_synced(c->ctx) == 1;
+    int ntp = mode != SC_ALWAYS && c->ops->ntp_synced && c->ops->ntp_synced(c->ctx) == 1;
     int big = fabs(off) > c->cfg.time_sync_threshold_s;
 
+    // NTP and GNSS disagree: neither is trusted, nothing is written.
     if (ntp && big)
     {
         if (manual || t->last_warn < 0 || now - t->last_warn >= TS_WARN_PERIOD_S)
@@ -181,7 +184,7 @@ static int act(struct core *c, double now, int manual, int *stepped)
         }
         return manual ? -EALREADY : 0;
     }
-    if (!ntp && (big || (manual && fabs(off) >= 0.001)))
+    if (mode != SC_OFF && !ntp && (big || (manual && fabs(off) >= 0.001)))
     {
         if (!manual && now < t->next_step)
             return 0;
@@ -193,10 +196,12 @@ static int act(struct core *c, double now, int manual, int *stepped)
             return r;
         }
         *stepped = 1;
-        rtc_write(c, 0, now, "after the step");
+        if (rtc)
+            rtc_write(c, 0, now, "after the step");
         return 0;
     }
-    if (manual || t->last_rtc < 0 || now - t->last_rtc >= TS_RTC_PERIOD_S)
+    // The RTC gets the GNSS time, also when the system clock stays off it.
+    if (rtc && (manual || t->last_rtc < 0 || now - t->last_rtc >= TS_RTC_PERIOD_S))
     {
         char why[64];
         snprintf(why, sizeof(why), "system clock %+.3f s%s", off, ntp ? ", NTP synchronised" : "");
@@ -246,10 +251,15 @@ void ts_rmc(struct core *c, size_t len, double now)
     act(c, now, 0, &stepped);
 }
 
-int ts_sync_now(struct core *c, double now, int *stepped)
+int ts_sync_now(struct core *c, double now, int *stepped, int *rtc_written)
 {
-    *stepped = 0;
+    *stepped = *rtc_written = 0;
+    if (c->cfg.system_clock == SC_OFF && !c->cfg.rtc)
+        return -EPERM;
     if (!ts_stable(c, now))
         return -ENODATA;
-    return act(c, now, 1, stepped);
+    unsigned writes = c->ts.rtc_writes;
+    int r = act(c, now, 1, stepped);
+    *rtc_written = c->ts.rtc_writes != writes;
+    return r;
 }

@@ -13,9 +13,9 @@
 struct props
 {
     const char *fix, *health, *power, *antenna, *version, *utc, *device, *pty, *sock;
-    const char *ts_mode, *last_sync;
+    const char *clock_mode, *last_sync;
     double ts_offset;
-    int valid, time_valid;
+    int valid, time_valid, rtc_sync;
     double lat, lon, alt, speed, course, hdop, pdop, vdop, cn0_best, cn0_mean, age;
     uint32_t used, view, tracked, interval, reopens, resets, bad, dropped;
     uint64_t sentences;
@@ -74,7 +74,8 @@ static void refresh(struct props *p, double now)
     p->bad = c->st.bad;
     p->dropped = S.f->dropped;
     p->sentences = c->st.sentences;
-    p->ts_mode = time_sync_mode_name(c->cfg.time_sync);
+    p->clock_mode = system_clock_mode_name(c->cfg.system_clock);
+    p->rtc_sync = c->cfg.rtc && c->cfg.rtc_device[0];
     snprintf(p->last_sync_buf, sizeof(p->last_sync_buf), "%s", c->ts.last_sync);
     p->last_sync = p->last_sync_buf;
     p->ts_offset = c->ts.offset;
@@ -258,10 +259,12 @@ static int method_sync_time(sd_bus_message *m, void *userdata, sd_bus_error *err
     int r = root_only(m, err, "SyncTimeNow");
     if (r < 0)
         return r;
-    int stepped = 0;
+    int stepped = 0, rtc = 0;
     double now = core_now();
     core_update(S.c, now);
-    r = ts_sync_now(S.c, now, &stepped);
+    r = ts_sync_now(S.c, now, &stepped, &rtc);
+    if (r == -EPERM)
+        return sd_bus_error_set(err, GNSS_ERROR "Disabled", "system_clock = off and rtc = off");
     if (r == -ENODATA)
         return sd_bus_error_set(err, GNSS_ERROR "NoFix",
                                 "no stable GNSS time (3D fix, 4 satellites, 5 epochs that agree)");
@@ -272,7 +275,7 @@ static int method_sync_time(sd_bus_message *m, void *userdata, sd_bus_error *err
     if (r < 0)
         return sd_bus_error_setf(err, GNSS_ERROR "Failed", "clock step: %s", strerror(-r));
     dbus_update();
-    return sd_bus_reply_method_return(m, "db", S.c->ts.offset, stepped);
+    return sd_bus_reply_method_return(m, "dbb", S.c->ts.offset, stepped, rtc);
 }
 
 static void finish_waiting(void)
@@ -321,7 +324,8 @@ static const sd_bus_vtable vtable[] = {
                              SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_METHOD_WITH_NAMES("SendCommand", "s", SD_BUS_PARAM(command), "as", SD_BUS_PARAM(replies),
                              method_send, SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD_WITH_NAMES("SyncTimeNow", "", , "db", SD_BUS_PARAM(offset) SD_BUS_PARAM(stepped),
+    SD_BUS_METHOD_WITH_NAMES("SyncTimeNow", "", , "dbb",
+                             SD_BUS_PARAM(offset) SD_BUS_PARAM(stepped) SD_BUS_PARAM(rtc_written),
                              method_sync_time, SD_BUS_VTABLE_UNPRIVILEGED),
     SD_BUS_SIGNAL_WITH_NAMES("FixChanged", "sb", SD_BUS_PARAM(fix) SD_BUS_PARAM(valid), 0),
     SD_BUS_SIGNAL_WITH_NAMES("PositionChanged", "ddd",
@@ -362,7 +366,8 @@ static const sd_bus_vtable vtable[] = {
     P("NmeaPty", "s", get_s, pty, 0),
     P("NmeaSocket", "s", get_s, sock, 0),
     P("NmeaDropped", "u", get_u, dropped, 0),
-    P("TimeSyncMode", "s", get_s, ts_mode, SD_BUS_VTABLE_PROPERTY_CONST),
+    P("SystemClockMode", "s", get_s, clock_mode, SD_BUS_VTABLE_PROPERTY_CONST),
+    P("RtcSync", "b", get_b, rtc_sync, SD_BUS_VTABLE_PROPERTY_CONST),
     P("LastTimeSync", "s", get_s, last_sync, EMITS),
     P("TimeSyncOffsetSec", "d", get_d, ts_offset, 0),
     SD_BUS_VTABLE_END,

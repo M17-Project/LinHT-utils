@@ -28,14 +28,15 @@ struct gnssd_config
 
     int send_command;               // 1 = SendCommand allowed (root only)
 
-    int time_sync;                  // enum time_sync_mode
+    int system_clock;               // enum system_clock_mode
+    int rtc;                        // 1 = write rtc_device from GNSS
     double time_sync_threshold_s;   // step the system clock above this offset
     double time_sync_delay_ms;      // receiver output delay, start of the second to the first RMC byte
     char rtc_device[32];            // battery-backed RTC, empty = no RTC writes
 };
 
-enum time_sync_mode { TS_AUTO, TS_OFF, TS_ALWAYS };
-const char *time_sync_mode_name(int mode);
+enum system_clock_mode { SC_AUTO, SC_OFF, SC_ALWAYS };
+const char *system_clock_mode_name(int mode);
 
 void config_defaults(struct gnssd_config *c);
 
