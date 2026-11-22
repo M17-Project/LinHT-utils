@@ -1,0 +1,26 @@
+[Unit]
+Description=LinHT GNSS daemon (Quectel LG77L on /dev/ttyLP2)
+After=dbus.service
+# The daemon holds the flock of /dev/ttyLP2. A reader that opens the tty
+# directly (gnss-status, fart-field-log with --gnss /dev/ttyLP2) must
+# stop first or read the pass-through /run/linht-gnssd/nmea instead.
+# The time sync steps the system clock and writes /dev/rtc1, which needs
+# CAP_SYS_TIME. The daemon runs as root for that and for the tty, the GPIO
+# and the D-Bus name. Do not add ProtectClock=yes, it takes the clock away.
+After=rtc1-hctosys.service
+
+[Service]
+Type=dbus
+BusName=org.m17project.linht.Gnss1
+ExecStart=/usr/bin/linht-gnssd
+Restart=always
+RestartSec=2
+RuntimeDirectory=linht-gnssd
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
