@@ -214,6 +214,21 @@ static int on_timer(sd_event_source *s, uint64_t usec, void *userdata)
     return r < 0 ? r : sd_event_source_set_enabled(s, SD_EVENT_ONESHOT);
 }
 
+// rtc_device must be the AB1805. A device tree that swaps rtc0 and rtc1
+// would make /dev/rtc1 the BBNSM of the SoC, which has no backup supply.
+static void check_rtc(const char *dev)
+{
+    char name[96];
+    int r = rtc_driver_name(dev, name, sizeof(name));
+    if (r < 0)
+        core_log(4, "%s: no RTC driver name: %s", dev, strerror(-r));
+    else if (strstr(name, "bbnsm"))
+        core_log(4, "%s is %s, the SoC RTC without backup supply, rtc_device should be the "
+                    "AB1805 (rtc-abx80x)", dev, name);
+    else
+        core_log(6, "%s is %s", dev, name);
+}
+
 static int daemon_run(void)
 {
     sd_bus *bus = NULL;
@@ -264,6 +279,8 @@ static int daemon_run(void)
         if (r < 0)
             core_log(3, "cannot own %s: %s", GNSS_BUS_NAME, strerror(-r));
     }
+    if (r >= 0 && core.cfg.rtc && core.cfg.rtc_device[0])
+        check_rtc(core.cfg.rtc_device);
     if (r >= 0)
     {
         core_log(6, "running, bus name %s, %s at %u baud, system clock %s, RTC %s", GNSS_BUS_NAME,

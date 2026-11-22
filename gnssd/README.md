@@ -291,6 +291,11 @@ is written, so the daemon waits for the next whole second before the write
 running, bus name org.m17project.linht.Gnss1, /dev/ttyLP2 at 9600 baud, system clock auto, RTC /dev/rtc1
 ```
 
+With `rtc = on` the daemon also logs the driver of `rtc_device` at start
+(`/dev/rtc1 is rtc-abx80x 0-0069`). When it is the BBNSM of the SoC, for
+example after a device tree change that swaps `rtc0` and `rtc1`, it logs a
+warning. Set `rtc_device` to the AB1805 then.
+
 ### SyncTimeNow
 
 `SyncTimeNow` (`linht-gnssd sync-time`) does at once what the two keys

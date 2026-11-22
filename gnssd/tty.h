@@ -3,6 +3,7 @@
 #ifndef GNSSD_TTY_H
 #define GNSSD_TTY_H
 
+#include <stddef.h>
 #include <time.h>
 
 // Opens the tty raw 8N1 at `baud`, non-blocking, with flock(LOCK_EX) like
@@ -20,6 +21,11 @@ int gpio_pulse_low(const char *chip, int line, unsigned ms);
 // the RTC counts whole seconds and its driver (rtc-abx80x) clears the
 // hundredths on a write. Returns 0 with the second in *written, or -errno.
 int rtc_set_from_system(const char *dev, double offset, time_t *written);
+
+// The driver name of an RTC device from /sys/class/rtc/rtcN/name, for
+// example "rtc-abx80x 0-0069" (AB1805) or "bbnsm_rtc 44440000.bbnsm:rtc"
+// (the SoC RTC without backup supply). Returns 0 or -errno.
+int rtc_driver_name(const char *dev, char *out, size_t size);
 
 // The test of timedatectl NTPSynchronized (systemd ntp_synced()): adjtimex
 // reports a maximum error below 16 s. clock_settime sets it back to 16 s.

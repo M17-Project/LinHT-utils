@@ -5,7 +5,9 @@
 #include <fcntl.h>
 #include <linux/gpio.h>
 #include <linux/rtc.h>
+#include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -143,6 +145,23 @@ int rtc_set_from_system(const char *dev, double offset, time_t *written)
     close(fd);
     if (r == 0 && written)
         *written = sec;
+    return r;
+}
+
+int rtc_driver_name(const char *dev, char *out, size_t size)
+{
+    char real[PATH_MAX], path[PATH_MAX + 32];
+    if (!realpath(dev, real))
+        return -errno;
+    const char *base = strrchr(real, '/');
+    snprintf(path, sizeof(path), "/sys/class/rtc/%s/name", base ? base + 1 : real);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -errno;
+    int r = fgets(out, (int)size, f) ? 0 : -EIO;
+    fclose(f);
+    if (r == 0)
+        out[strcspn(out, "\n")] = 0;
     return r;
 }
 
