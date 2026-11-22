@@ -400,6 +400,24 @@ static void test_modes(void)
         CHECK(ok);
     }
 
+    // A system clock before the build year (2024-02-27T17:26:05Z, where
+    // systemd starts it when rtc1 has lost its time) is not valid: auto
+    // steps it also when NTP claims to keep it, off only writes the RTC.
+    for (int mode = SC_AUTO; mode <= SC_ALWAYS; mode++)
+    {
+        struct core c;
+        int stepped, wrote;
+        setup(&c, 1709054765.0 - g0);
+        T.ntp = 1;
+        c.cfg.system_clock = mode;
+        run(&c, 1, 20, 1, 3, 8, 0);
+        CHECK(T.sets == (mode != SC_OFF) && T.rtc == 1);
+        CHECK_NEAR(T.rtc_value, g0 + 6 + WIRE, 0.01);
+        if (mode != SC_OFF)
+            CHECK_NEAR(T.real, g0 + WIRE, 0.01);
+        CHECK(ts_sync_now(&c, 20, &stepped, &wrote) == 0 && !stepped && wrote);
+    }
+
     // rtc = on without rtc_device: nothing written, SyncTimeNow says so.
     struct core c;
     int stepped, wrote;

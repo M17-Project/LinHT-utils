@@ -170,8 +170,13 @@ static int act(struct core *c, double now, int manual, int *stepped)
 
     if (mode == SC_OFF && !rtc)
         return 0;
-    int ntp = mode != SC_ALWAYS && c->ops->ntp_synced && c->ops->ntp_synced(c->ctx) == 1;
-    int big = fabs(off) > c->cfg.time_sync_threshold_s;
+    // A clock before the build year is not valid (systemd starts it at its
+    // own build time when the RTC has nothing). NTP cannot keep such a
+    // clock, a claim of sync (ntpd with only the local clock) is ignored.
+    double rt = realtime(c);
+    int invalid = !isnan(rt) && rt < days_from_civil(ts_build_year(), 1, 1) * 86400.0;
+    int ntp = mode != SC_ALWAYS && !invalid && c->ops->ntp_synced && c->ops->ntp_synced(c->ctx) == 1;
+    int big = invalid || fabs(off) > c->cfg.time_sync_threshold_s;
 
     // NTP and GNSS disagree: neither is trusted, nothing is written.
     if (ntp && big)

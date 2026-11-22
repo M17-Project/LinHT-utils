@@ -242,7 +242,7 @@ separate choice of the operator:
 
 | `system_clock` | The system clock |
 |---|---|
-| `auto` | stepped (`clock_settime`) when the offset is above `time_sync_threshold_s`, unless NTP keeps the clock |
+| `auto` | stepped (`clock_settime`) when it is not valid (before the build year of the daemon) or the offset is above `time_sync_threshold_s`, unless NTP keeps the clock |
 | `always` | as `auto`, but NTP is ignored |
 | `off` | never stepped |
 
@@ -257,6 +257,12 @@ When NTP keeps the clock and GNSS differs from it by more than the
 threshold, the daemon cannot tell which one is wrong. It then steps nothing
 and writes nothing, and logs a warning once per hour. With
 `system_clock = always` this case does not exist, the clock is stepped.
+
+A clock before the build year is never taken as kept by NTP. systemd
+starts the clock at its own build time (February 2024 on the current
+image) when `rtc1` has nothing, and an `ntpd` with only the local clock
+`127.127.1.0` (older Rev B images) reports sync without a source. Such a
+clock is stepped in `auto` mode at the first stable fix.
 
 `rtc = on` with `system_clock = off` writes the GNSS time to the RTC, not
 the system time, so the RTC is right also when the system clock is not.
