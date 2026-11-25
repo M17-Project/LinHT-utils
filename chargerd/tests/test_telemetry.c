@@ -463,6 +463,71 @@ static void field_learning(void)
     CHECK_NEAR(t.learn_est, cap, 0.07 * cap);
 }
 
+// --- Discharges of unit B (Rev B, VREG 8.40 V), from its cycles.jsonl ---
+
+struct b_cycle_log
+{
+    double duration_s, energy_wh;
+    float curve[TEL_CURVE_PTS];
+};
+
+// The four discharges from a full anchor of 2026-11-21 to 25, in RX at
+// 1.3 to 1.4 W. VBAT at every 5 % of the energy.
+static const struct b_cycle_log b_log[] = {
+    { 10596, 3.809, { 8.348, 8.238, 8.211, 8.186, 8.160, 8.134, 8.108, 8.087, 8.064, 8.050, 8.036,
+                      8.019, 8.003, 7.982, 7.969, 7.947, 7.925, 7.908, 7.888, 7.863, 7.845 } },
+    { 8596, 3.409, { 8.240, 8.198, 8.172, 8.137, 8.121, 8.097, 8.078, 8.056, 8.036, 8.032, 8.016,
+                     8.005, 7.988, 7.974, 7.955, 7.938, 7.918, 7.896, 7.873, 7.867, 7.846 } },
+    { 7004, 2.735, { 8.281, 8.231, 8.210, 8.190, 8.164, 8.146, 8.121, 8.105, 8.087, 8.070, 8.061,
+                     8.042, 8.035, 8.024, 8.016, 8.003, 7.990, 7.970, 7.957, 7.948, 7.938 } },
+    { 12607, 4.436, { 8.239, 8.192, 8.150, 8.119, 8.088, 8.056, 8.028, 8.016, 7.994, 7.967, 7.944,
+                      7.920, 7.887, 7.865, 7.844, 7.819, 7.790, 7.770, 7.745, 7.723, 7.696 } },
+};
+
+// Full anchor, the logged discharge at its mean power, USB in.
+static void b_replay(const struct b_cycle_log *c)
+{
+    in.discharging = 0;
+    in.charging = 0;
+    in.full_event = 1;
+    run(1, c->curve[0], 0);
+    in.discharging = 1;
+    double p = c->energy_wh / (c->duration_s / 3600.0);
+    for (int s = 0; s < (int)c->duration_s; s++)
+    {
+        double f = s / c->duration_s * (TEL_CURVE_PTS - 1);
+        int k = (int)f;
+        double v = c->curve[k] + (c->curve[k + 1] - c->curve[k]) * (f - k);
+        run(1, v, -p);
+    }
+    in.discharging = 0;
+    in.charging = 1;
+    run(1, 7.9, 2.4);
+}
+
+static void unit_b(void)
+{
+    setup();
+    // 2026-11-21: 3.81 Wh to 66.6 %, C_est 11.4 Wh.
+    b_replay(&b_log[0]);
+    CHECK(t.learn_result == TEL_LEARN_USED);
+    CHECK_NEAR(t.learn_est, 11.41, 0.05);
+    // 2026-11-23: 3.41 Wh to 66.7 %, C_est 10.2 Wh.
+    b_replay(&b_log[1]);
+    CHECK_NEAR(t.learn_est, 10.24, 0.05);
+    CHECK(t.learn_n == 2 && !tel_capacity_reliable(&t));
+    // 2026-11-24: to 72.4 %, too shallow.
+    b_replay(&b_log[2]);
+    CHECK(t.learn_result == TEL_LEARN_SHALLOW && t.learn_n == 2);
+    // 2026-11-25: 4.44 Wh from 100 to 57 %, C_est 10.3 Wh, now reliable.
+    b_replay(&b_log[3]);
+    CHECK(t.learn_result == TEL_LEARN_USED);
+    CHECK_NEAR(t.learn_depth, 43.0, 0.3);
+    CHECK_NEAR(t.learn_est, 10.30, 0.05);
+    CHECK(t.learn_n == 3 && tel_capacity_reliable(&t));
+    CHECK_NEAR(t.cap_wh, 11.13, 0.05);
+}
+
 void test_telemetry(void)
 {
     averages();
@@ -472,4 +537,5 @@ void test_telemetry(void)
     restore();
     vreg_table();
     field_learning();
+    unit_b();
 }
