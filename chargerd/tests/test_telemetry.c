@@ -104,63 +104,25 @@ static void counter_and_soc(void)
     CHECK(t.discharge_since < 0);
 }
 
-// Discharge from a full anchor with VBAT falling linearly, then charge.
-static void discharge(int seconds, double v0, double v1, double power)
+// Discharge from a full anchor with VBAT falling linearly, then charge:
+// logged with its curve.
+static void cycle_curve(void)
 {
+    setup();
     in.full_event = 1;
-    in.discharging = 0;
-    in.charging = 0;
-    run(1, v0, 0);
+    run(1, 8.3, 0);
     in.discharging = 1;
-    for (int k = 0; k < seconds; k++)
-        run(1, v0 + (v1 - v0) * k / seconds, power);
+    for (int k = 0; k < 36000; k++)
+        run(1, 8.3 + (7.4 - 8.3) * k / 36000, -1.2);
     in.discharging = 0;
     in.charging = 1;
-    run(5, 8.0, 2.0);
-}
-
-static void learning(void)
-{
-    // 10 h at 1.2 W = 12 Wh to a voltage SoC of 25 % (3.70 V per cell):
-    // C_est = 12 / 0.75 = 16 Wh, C = 14.8 + 0.5 * 0.75 * 1.2 = 15.25 Wh.
-    setup();
-    discharge(36000, 8.3, 7.4, -1.2);
-    CHECK(t.learned || t.n70 == 1);
-    CHECK_NEAR(t.cap_wh, 15.25, 0.05);
-    CHECK(t.n70 == 1 && t.n50 == 1);
-    CHECK(tel_capacity_reliable(&t));
-    CHECK_NEAR(tel_soh(&t), 100 * 15.25 / 14.8, 0.4);
-
-    // The discharge was logged with its curve.
-    CHECK(t.cycle.kind == TEL_DISCHARGE);
+    run(1, 8.0, 2.0);
+    CHECK(t.cycle_ready && t.cycle.kind == TEL_DISCHARGE);
     CHECK_NEAR(t.cycle.energy_wh, 12.0, 0.01);
     CHECK_NEAR(t.cycle.duration, 36000, 2);
     CHECK_NEAR(t.cycle.curve[0], 8.3, 0.01);
     CHECK_NEAR(t.cycle.curve[10], 7.85, 0.02);
     CHECK_NEAR(t.cycle.curve[TEL_CURVE_PTS - 1], 7.4, 0.02);
-
-    // Two discharges of 50 % make it reliable too.
-    setup();
-    discharge(20000, 8.3, 7.58, -1.0);         // 3.79 V per cell, 48 %
-    CHECK(t.n50 == 1 && t.n70 == 0 && !tel_capacity_reliable(&t));
-    discharge(20000, 8.3, 7.58, -1.0);
-    CHECK(t.n50 == 2 && tel_capacity_reliable(&t));
-
-    // Not deep enough: no update.
-    setup();
-    discharge(10000, 8.3, 7.9, -1.0);          // 3.95 V per cell = 70 %
-    CHECK(t.n50 == 0 && t.cap_wh == 14.8);
-
-    // Heavy load (mean 4 W): no update.
-    setup();
-    discharge(10000, 8.3, 7.4, -4.0);
-    CHECK(t.n50 == 0 && t.cap_wh == 14.8);
-
-    // Clamped to 110 % of rated.
-    setup();
-    for (int i = 0; i < 6; i++)
-        discharge(36000, 8.3, 7.4, -2.5);      // 25 Wh to 25 %
-    CHECK_NEAR(t.cap_wh, 1.1 * 14.8, 1e-6);
 }
 
 static void restore(void)
@@ -171,29 +133,47 @@ static void restore(void)
     in.full_event = 1;
     run(1, 8.3, 0);
     in.discharging = 1;
-    run(3600 * 5, 7.6, -1.48);                  // 50 %
+    run(3600 * 5, 7.6, -1.48);                  // 7.4 Wh to 50 %, 0.195 A
     tel_save(&t, &s);
-    CHECK(s.anchored && s.learn_active);
+    CHECK(s.anchored && s.learn_active && s.learn_rest);
+    CHECK_NEAR(s.learn_rest_e, 7.4, 0.01);
+    CHECK_NEAR(s.learn_rest_socv, 50, 0.5);
 
-    // The voltage agrees (7.6 V is 50 %): the counter continues.
+    // The voltage agrees (7.6 V is 50 %): the counter and the learning
+    // discharge continue.
     tel_init(&t, &cfg);
     CHECK(tel_restore(&t, &s, 7.62) == 1);
-    CHECK(t.anchored && t.learn_active);
+    CHECK(t.anchored && t.learn_active && t.learn_rest && !t.learned);
     CHECK_NEAR(t.soc, 50, 0.2);
 
-    // It does not (8.3 V is about 93 %): back to the voltage table.
+    // It does not (8.3 V is about 93 %): back to the voltage table, and the
+    // discharge is evaluated at its last rest point, 7.4 Wh for 50 %.
     tel_init(&t, &cfg);
     CHECK(tel_restore(&t, &s, 8.3) == 0);
-    CHECK(!t.anchored && !t.soc_from_counter);
+    CHECK(!t.anchored && !t.soc_from_counter && !t.learn_active);
     CHECK(t.soc > 90);
+    CHECK(t.learned && t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK_NEAR(t.learn_est, 14.8, 0.2);
+
+    // A state file without the learning weight (older daemon): the saved
+    // capacity with the weight of the prior, not reliable.
+    memset(&s, 0, sizeof(s));
+    s.cap_wh = 14.8;
+    tel_init(&t, &cfg);
+    tel_restore(&t, &s, 7.6);
+    CHECK(t.cap_wh == 14.8 && t.learn_n == 0 && !tel_capacity_reliable(&t));
 }
 
-// --- Partial cycles: a synthetic battery between 50 and 70 % ---
+// --- Capacity learning with a synthetic battery ---
 
-#define R_PACK 0.15             // ohm
-#define I_HIZ  0.16             // A, load in quiet (HIZ)
+#define R_PACK  0.15            // ohm
+#define R_POL   0.05            // ohm, polarization that relaxes slowly
+#define TAU_POL 300.0           // s
+#define I_RX    0.16            // A, the unit in RX (or quiet)
 
 static double bsoc;             // true SoC of the synthetic battery
+static double vpol;             // its polarization voltage
+static int seen;                // a learning discharge ended since the last reset
 static unsigned rng = 12345;
 
 static double urand(void)       // -1 .. 1, the same sequence every run
@@ -202,140 +182,177 @@ static double urand(void)       // -1 .. 1, the same sequence every run
     return ((rng >> 8) & 0xffff) / 32767.5 - 1.0;
 }
 
-// One second with the given battery current. VBAT is the table voltage of
-// the true SoC plus the table error, the IR drop, a relaxation term and
-// 5 mV ADC noise. gain scales the reported current (a counting error).
-static void bstep(double cap, double i, double verr, double relax, double gain)
+// One second at the battery current i (negative discharges). VBAT is the
+// table voltage of the true SoC plus the table error verr (V per pack), the
+// IR drop, the polarization and 5 mV of ADC noise. gain scales the reported
+// current (a counting error).
+static void bstep(double cap, double i, double verr, double gain)
 {
-    double v = tel_voltage_from_soc(&t, bsoc) + verr + i * R_PACK + relax + 0.005 * urand();
+    vpol += (i * R_POL - vpol) / TAU_POL;
+    double v = tel_voltage_from_soc(&t, bsoc) + verr + i * R_PACK + vpol + 0.005 * urand();
     bsoc += v * i / 3600.0 / cap * 100.0;
+    if (bsoc > 100)
+        bsoc = 100;
     in.now = now;
     in.wall = 1.7e9 + now;
     in.vbat = v;
     in.ibat = i * gain;
     tel_sample(&t, &in);
+    seen |= t.learned;
     in.full_event = 0;
     now += 1;
 }
 
-// Charge at 1 A to hi, then quiet (HIZ) at load amps down to lo. The table
-// error moves linearly from e_hi at hi to e_lo at lo (V per pack).
-static void partial_cycle(double cap, double lo, double hi, double load, double e_hi, double e_lo,
-                          double gain)
-{
-    in.discharging = 0;
-    in.charging = 1;
-    while (bsoc < hi)
-        bstep(cap, 1.0, e_hi, 0.05, gain);
-    in.charging = 0;
-    in.discharging = 1;
-    for (int k = 0; bsoc > lo; k++)
-    {
-        double err = e_hi + (e_lo - e_hi) * (hi - bsoc) / (hi - lo);
-        bstep(cap, -load, err, 0.06 * exp(-k / 120.0), gain);
-    }
-    // Charging resumes: the segment ends.
-    in.discharging = 0;
-    in.charging = 1;
-    bstep(cap, 1.0, e_lo, 0.05, gain);
-}
-
-static void partial_setup(void)
+static void b_setup(double vreg)
 {
     setup();
-    bsoc = 60;
+    cfg.charge_voltage_v = vreg;
+    bsoc = 100;
+    vpol = 0;
+    seen = 0;
     rng = 12345;
 }
 
-static void partial_learning(void)
+// USB in: charge at 1 A for the given seconds.
+static void b_charge(double cap, int seconds)
 {
-    const double cap = 12.0;    // 81 % of rated
-
-    // Ten cycles 70 -> 50 % with a table error of up to 10 mV per pack at
-    // each end (0.7 % SoC): within 10 % of the true capacity.
-    partial_setup();
-    CHECK(isnan(tel_capacity_partial_wh(&t)));
-    CHECK(!strcmp(tel_capacity_source(&t), "none"));
-    // Drawn in two statements, because C leaves the order of the arguments
-    // of one call open (x86 gcc took the second first, aarch64 the first).
-    // This order keeps the values the checks were tuned with.
-    double e2 = 0.01 * urand();
-    double e1 = 0.01 * urand();
-    partial_cycle(cap, 50, 70, I_HIZ, e1, e2, 1.0);
-    CHECK(t.part_n == 1);
-    CHECK(t.learned_partial || t.part_n == 1);
-    // The first cycle moves part of the way from the rated value.
-    double first = t.part_wh;
-    CHECK(first < 14.8 && first > cap);
-    CHECK(14.8 - first < 0.6 * (14.8 - cap));
-    CHECK_NEAR(t.part_est, cap, 0.1 * cap);
-    CHECK(t.part_depth > 15 && t.part_depth < 20);  // the settle time is not counted
-    for (int c = 1; c < 10; c++) {
-        double f2 = 0.01 * urand();
-        double f1 = 0.01 * urand();
-        partial_cycle(cap, 50, 70, I_HIZ, f1, f2, 1.0);
-    }
-    CHECK(t.part_n == 10);
-    CHECK_NEAR(t.part_wh, cap, 0.1 * cap);
-    CHECK(!tel_capacity_reliable(&t) && t.cap_wh == 14.8);   // never full: no full learning
-    CHECK(!strcmp(tel_capacity_source(&t), "partial"));
-    CHECK_NEAR(tel_capacity_wh(&t), t.part_wh, 1e-12);
-    CHECK_NEAR(tel_soh(&t), 100 * t.part_wh / 14.8, 1e-9);
-
-    // One bad cycle (the current reads 40 % high) moves it by a bounded step.
-    double before = t.part_wh;
-    partial_cycle(cap, 50, 70, I_HIZ, 0, 0, 1.4);
-    CHECK(t.part_n == 11);
-    CHECK(t.part_est > 1.3 * cap);
-    CHECK(fabs(t.part_wh - before) < 0.06 * cap);
-
-    // A shallow segment (10 %) and a heavy load are not used.
-    int n = t.part_n;
-    partial_cycle(cap, 58, 70, I_HIZ, 0, 0, 1.0);
-    CHECK(t.part_n == n);
-    partial_cycle(cap, 40, 70, 1.0, 0, 0, 1.0);
-    CHECK(t.part_n == n);
-
-    // A short gap between two leases (USB, no charge current) does not end
-    // the segment.
-    partial_setup();
-    in.charging = 1;
-    while (bsoc < 70)
-        bstep(cap, 1.0, 0, 0.05, 1.0);
-    in.charging = 0;
-    in.discharging = 1;
-    for (int k = 0; k < 3600; k++)
-        bstep(cap, -I_HIZ, 0, 0, 1.0);
     in.discharging = 0;
     in.charging = 1;
-    bstep(cap, 0.0, 0, 0, 1.0);
-    bstep(cap, 0.0, 0, 0, 1.0);
-    CHECK(t.part_state == TEL_PART_COUNT);
-    partial_cycle(cap, 50, bsoc, I_HIZ, 0, 0, 1.0);
-    CHECK(t.part_n == 1 && t.part_depth > 15);
-    CHECK_NEAR(t.part_est, cap, 0.05 * cap);
-
-    // Saved and restored with the state file.
-    struct tel_saved sv;
-    tel_save(&t, &sv);
-    double pw = t.part_wh;
-    tel_init(&t, &cfg);
-    tel_restore(&t, &sv, 7.6);
-    CHECK(t.part_n == 1 && t.part_wh == pw && t.part_w == sv.part_w);
-
-    // A reliable full-anchored value wins, the partial one stays next to it.
-    partial_setup();
-    for (int c = 0; c < 3; c++)
-        partial_cycle(cap, 50, 70, I_HIZ, 0, 0, 1.0);
-    CHECK(!strcmp(tel_capacity_source(&t), "partial"));
-    discharge(36000, 8.3, 7.4, -1.2);           // the learning() case, 15.25 Wh
-    CHECK(tel_capacity_reliable(&t));
-    CHECK(!strcmp(tel_capacity_source(&t), "full"));
-    CHECK_NEAR(tel_soh(&t), 100 * 15.25 / 14.8, 0.4);
-    CHECK(t.part_n >= 3 && !isnan(tel_capacity_partial_wh(&t)));
+    for (int k = 0; k < seconds; k++)
+        bstep(cap, 1.0, 0, 1.0);
 }
 
-// --- The voltage table follows the charge voltage ---
+// Charge to full, the full anchor, 1 h on USB at full.
+static void b_full(double cap)
+{
+    seen = 0;
+    in.discharging = 0;
+    in.charging = 1;
+    while (bsoc < 100)
+        bstep(cap, 1.0, 0, 1.0);
+    in.charging = 0;
+    in.full_event = 1;
+    for (int k = 0; k < 3600; k++)
+        bstep(cap, 0, 0, 1.0);
+}
+
+// On battery (or quiet) in RX for the given seconds.
+static void b_idle(double cap, int seconds, double verr)
+{
+    in.discharging = 1;
+    in.charging = 0;
+    for (int k = 0; k < seconds; k++)
+        bstep(cap, -I_RX, verr, 1.0);
+}
+
+// Use in the field: RX with a 20 s TX at 1.5 A every 2 min, mean 0.38 A.
+static void b_use(double cap, int seconds)
+{
+    in.discharging = 1;
+    in.charging = 0;
+    for (int k = 0; k < seconds; k++)
+        bstep(cap, k % 120 < 20 ? -1.5 : -I_RX, 0, 1.0);
+}
+
+// From full in RX down to the true SoC lo, then USB in.
+static void b_cycle(double cap, double lo, double verr, double gain)
+{
+    b_full(cap);
+    in.discharging = 1;
+    while (bsoc > lo)
+        bstep(cap, -I_RX, verr, gain);
+    b_charge(cap, 5);
+}
+
+static void learning(void)
+{
+    const double cap = 11.0;    // 74 % of rated
+
+    // 100 -> 60 % in RX, then USB: learned at the last rest point before
+    // the charge. The IR drop and the polarization (32 mV per pack) read
+    // the depth 2 % too large, so C_est is about 5 % low.
+    b_setup(8.40);
+    CHECK(!tel_capacity_reliable(&t) && t.cap_wh == 14.8 && t.learn_n == 0);
+    b_cycle(cap, 60, 0, 1.0);
+    CHECK(seen && t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK(!t.learn_active);
+    CHECK_NEAR(t.learn_depth, 41, 2);
+    CHECK_NEAR(t.learn_est, cap, 0.07 * cap);
+    double w = (t.learn_depth / 40) * (t.learn_depth / 40);
+    CHECK_NEAR(t.learn_weight, w, 1e-9);
+    CHECK_NEAR(t.cap_wh, 14.8 + w / (0.5 * 0.9 + w) * (t.learn_est - 14.8), 1e-9);
+    CHECK(!tel_capacity_reliable(&t));          // weight 1.5
+    CHECK_NEAR(tel_capacity_wh(&t), t.cap_wh, 1e-12);
+    CHECK_NEAR(tel_soh(&t), 100 * t.cap_wh / 14.8, 1e-9);
+
+    // The second one makes it reliable, a few more settle it.
+    b_cycle(cap, 60, 0, 1.0);
+    CHECK(t.learn_n == 2 && tel_capacity_reliable(&t));
+    for (int c = 0; c < 4; c++)
+        b_cycle(cap, 60, 0.02 * urand(), 1.0);  // table error up to 20 mV per pack
+    CHECK(t.learn_n == 6);
+    CHECK_NEAR(t.cap_wh, cap, 0.07 * cap);
+
+    // The counter uses it: 20 % of the true capacity is 20 % of the SoC.
+    b_full(cap);
+    b_idle(cap, (int)(0.2 * cap / (I_RX * 8.0) * 3600), 0);
+    CHECK_NEAR(t.soc, 80, 2);
+    CHECK_NEAR(t.soc, 100.0 * (1 + t.e_wh / t.cap_wh), 1e-9);
+
+    // One bad discharge (the current reads 40 % high) moves the settled
+    // value by a bounded step.
+    double before = t.cap_wh;
+    b_charge(cap, 5);
+    b_cycle(cap, 60, 0, 1.4);
+    CHECK(t.learn_n == 7 && t.learn_est > 1.3 * cap);
+    CHECK(fabs(t.cap_wh - before) < 0.15 * cap);
+
+    // One deep discharge (to 30 %) is enough for a reliable value. The
+    // table is flat there (3.3 mV per % and cell), so the same load drop
+    // reads 5 % of SoC and C_est comes out about 7 % low.
+    b_setup(8.40);
+    b_cycle(cap, 30, 0, 1.0);
+    CHECK(t.learn_n == 1 && tel_capacity_reliable(&t));
+    CHECK_NEAR(t.learn_est, 0.93 * cap, 0.03 * cap);
+    CHECK_NEAR(t.cap_wh, cap, 0.1 * cap);
+
+    // Too shallow (100 -> 80 %): not used.
+    b_setup(8.40);
+    b_cycle(cap, 80, 0, 1.0);
+    CHECK(seen && t.learn_result == TEL_LEARN_SHALLOW);
+    CHECK(t.learn_n == 0 && t.cap_wh == 14.8);
+
+    // A current that reads 30 % of the true one: implausible, not used.
+    b_setup(8.40);
+    b_cycle(cap, 60, 0, 0.3);
+    CHECK(t.learn_result == TEL_LEARN_IMPLAUSIBLE && t.learn_n == 0);
+
+    // A steady 1 A load has no rest point: not used, the energy is known.
+    b_setup(8.40);
+    b_full(cap);
+    in.discharging = 1;
+    while (bsoc > 50)
+        bstep(cap, -1.0, 0, 1.0);
+    b_charge(cap, 5);
+    CHECK(t.learn_result == TEL_LEARN_NO_REST && t.learn_n == 0);
+    CHECK_NEAR(t.learn_e, 0.5 * cap, 0.05 * cap);
+
+    // A full anchor in a poll that still has charge current starts the
+    // learning discharge, the current of that poll does not end it.
+    b_setup(8.40);
+    in.charging = 1;
+    in.full_event = 1;
+    bstep(cap, 0.3, 0, 1.0);
+    CHECK(t.anchored && t.learn_active && !seen);
+
+    // A top-off charge after the anchor ends the learning discharge without
+    // energy: nothing to learn.
+    b_setup(8.40);
+    b_full(cap);
+    b_charge(cap, 5);
+    CHECK(seen && t.learn_result == TEL_LEARN_NO_REST && t.learn_e < 0.01);
+
+}
 
 static void vreg_table(void)
 {
@@ -353,169 +370,106 @@ static void vreg_table(void)
     CHECK_NEAR(tel_soc_from_voltage(&t, 7.60), 50, 1e-9);
     CHECK_NEAR(tel_voltage_from_soc(&t, 100), 8.40, 1e-9);
 
-    // The full anchored learning at 8.30 V: 10 h at 1.0 W = 10 Wh from full
-    // to 7.40 V, which is 25 / 0.95 = 26.3 % of the 8.30 V capacity:
-    // C_est = 10 / 0.737 = 13.57 Wh, C = 14.8 + 0.5 * 0.737 * (13.57 - 14.8).
-    setup();
-    cfg.charge_voltage_v = 8.30;
-    discharge(36000, 8.3, 7.4, -1.0);
-    double depth = 1 - 25 / 0.95 / 100;
-    CHECK(t.n70 == 1);
-    CHECK_NEAR(t.cap_wh, 14.8 + 0.5 * depth * (10.0 / depth - 14.8), 0.05);
-}
-
-// --- Field use on battery: rest point to rest point ---
-
-#define R_POL   0.05            // ohm, polarization that relaxes slowly
-#define TAU_POL 300.0           // s
-
-static double vpol;             // polarization voltage of the synthetic battery
-
-// One second on battery (or charging with charge set) at current i, with
-// the polarization of the cells. verr is the table error (V per pack).
-static void fstep(double cap, double i, double verr, int charge)
-{
-    vpol += (i * R_POL - vpol) / TAU_POL;
-    in.charging = charge;
-    in.discharging = !charge;
-    bstep(cap, i, verr, vpol, 1.0);
-}
-
-// Idle RX on battery for the given seconds.
-static void field_idle(double cap, int seconds, double verr)
-{
-    for (int k = 0; k < seconds; k++)
-        fstep(cap, -I_HIZ, verr, 0);
-}
-
-// Use in the field: RX with a 20 s TX at 1.5 A every 2 min.
-static void field_use(double cap, int seconds, double verr0, double verr1)
-{
-    for (int k = 0; k < seconds; k++)
-        fstep(cap, k % 120 < 20 ? -1.5 : -I_HIZ, verr0 + (verr1 - verr0) * k / seconds, 0);
-}
-
-// USB in: charge at 1 A for the given seconds.
-static void field_charge(double cap, int seconds)
-{
-    for (int k = 0; k < seconds; k++)
-        fstep(cap, 1.0, 0, 1);
-}
-
-static void field_setup(double soc)
-{
-    setup();
-    cfg.charge_voltage_v = 8.30;
-    bsoc = soc;
-    vpol = 0;
-    rng = 777;
-    in.discharging = 1;
+    // The learning at 8.30 V: the depth is read on the scaled table, so the
+    // capacity is the one of a charge to 8.30 V.
+    b_setup(8.30);
+    b_cycle(10.0, 60, 0, 1.0);
+    CHECK(t.learn_result == TEL_LEARN_USED);
+    CHECK_NEAR(t.learn_est, 10.0, 0.07 * 10.0);
 }
 
 static void field_learning(void)
 {
     const double cap = 12.0;    // of the 8.30 V charge, 81 % of rated
 
-    // Unplugged at 90 %, 30 min idle, 2 h in the field (mean 0.38 A, the
-    // TX steps never let VBAT rest), 30 min idle, USB in, about 60 % deep. The segment runs
-    // from the first rest point (10 min after the unplug) to the last one
-    // before the charge: within 10 % of the true capacity, as one partial
-    // cycle in quiet.
-    for (int run = 0; run < 4; run++)
-    {
-        field_setup(90);
-        rng = 777 + 31 * run;
-        double e0 = 0.01 * urand();
-        double e1 = 0.01 * urand();
-        field_idle(cap, 1800, e0);
-        field_use(cap, 7200, e0, e1);
-        field_idle(cap, 1800, e1);
-        CHECK(t.part_n == 0 && t.part_state == TEL_PART_COUNT);
-        field_charge(cap, 5);
-        CHECK(t.part_n == 1);
-        CHECK(t.part_depth > 50 && t.part_depth < 70);
-        CHECK_NEAR(t.part_est, cap, 0.1 * cap);
-        // Depth weight (depth / 20 %)^2, at most 9, rest load 0.16 A.
-        double wd = (t.part_depth / 20) * (t.part_depth / 20);
-        CHECK_NEAR(t.part_weight, (wd < 9 ? wd : 9) / (1 + (I_HIZ / 0.25) * (I_HIZ / 0.25)), 1e-6);
-        CHECK(!strcmp(tel_capacity_source(&t), "partial"));
-    }
-
-    // Several field days settle within 10 % as the quiet cycles do.
-    field_setup(90);
-    for (int day = 0; day < 6; day++)
-    {
-        field_charge(cap, 1);
-        while (bsoc < 90)
-            fstep(cap, 1.0, 0, 1);
-        double e0 = 0.01 * urand();
-        double e1 = 0.01 * urand();
-        field_idle(cap, 1800, e0);
-        field_use(cap, 5400 + 600 * day, e0, e1);
-        field_idle(cap, 1200, e1);
-        field_charge(cap, 5);
-    }
-    CHECK(t.part_n == 6);
-    CHECK_NEAR(t.part_wh, cap, 0.1 * cap);
+    // Unplugged at full, 30 min idle, 2 h in the field (the TX steps never
+    // let VBAT rest), 30 min idle, USB in, about 60 % deep: learned at the
+    // rest point before the charge. The end is at 38 %, where the table is
+    // flat, so C_est is up to 10 % low (see the deep case of learning()).
+    b_setup(8.30);
+    b_full(cap);
+    b_idle(cap, 1800, 0);
+    b_use(cap, 7200);
+    b_idle(cap, 1800, 0);
+    CHECK(t.learn_active && t.learn_rest && t.learn_n == 0);
+    b_charge(cap, 5);
+    CHECK(t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK(t.learn_depth > 55 && t.learn_depth < 70);
+    CHECK_NEAR(t.learn_est, cap, 0.1 * cap);
 
     // No rest after the use: the last rest point is before it, too shallow.
-    field_setup(90);
-    field_idle(cap, 1800, 0);
-    field_use(cap, 7200, 0, 0);
-    field_charge(cap, 5);
-    CHECK(t.part_n == 0);
+    b_setup(8.30);
+    b_full(cap);
+    b_idle(cap, 1800, 0);
+    b_use(cap, 7200);
+    b_charge(cap, 5);
+    CHECK(t.learn_result == TEL_LEARN_SHALLOW && t.learn_n == 0);
 
-    // A charge in the middle ends the segment. Neither half has a rest point
-    // at both ends 15 % apart, although the whole run is 45 % deep.
-    field_setup(90);
-    field_idle(cap, 1800, 0);
-    field_use(cap, 3600, 0, 0);
-    field_charge(cap, 300);
-    CHECK(t.part_n == 0 && t.part_state == TEL_PART_IDLE);
-    field_use(cap, 3600, 0, 0);
-    field_idle(cap, 1800, 0);
-    field_charge(cap, 5);
-    CHECK(t.part_n == 0);
+    // A charge in the middle ends the learning discharge. Without a new
+    // full anchor the rest of the day is not learned.
+    b_setup(8.30);
+    b_full(cap);
+    b_idle(cap, 1800, 0);
+    b_use(cap, 3600);
+    b_charge(cap, 300);
+    CHECK(!t.learn_active && t.learn_n == 0);
+    seen = 0;
+    b_use(cap, 3600);
+    b_idle(cap, 1800, 0);
+    b_charge(cap, 5);
+    CHECK(!seen && t.learn_n == 0);
 
-    // Too little depth between the rest points: about 11 %.
-    field_setup(90);
-    field_idle(cap, 1800, 0);
-    field_use(cap, 300, 0, 0);
-    field_idle(cap, 1800, 0);
-    field_charge(cap, 5);
-    CHECK(t.part_n == 0);
+    // A short gap without charge current (USB between two quiet leases)
+    // does not end it.
+    b_setup(8.30);
+    b_full(cap);
+    b_idle(cap, 3600, 0);
+    in.discharging = 0;
+    in.charging = 1;
+    for (int k = 0; k < 60; k++)
+        bstep(cap, 0, 0, 1.0);
+    CHECK(t.learn_active);
+    in.discharging = 1;
+    in.charging = 0;
+    while (bsoc > 55)
+        bstep(cap, -I_RX, 0, 1.0);
+    b_charge(cap, 5);
+    CHECK(t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK_NEAR(t.learn_est, cap, 0.07 * cap);
 
-    // Light use the whole time (RX only, mean 0.16 A): every second after
-    // the first 10 min is a rest point, the result is the same as quiet.
-    field_setup(90);
-    field_idle(cap, 3 * 3600, 0);
-    field_charge(cap, 5);
-    CHECK(t.part_n == 1);
-    CHECK_NEAR(t.part_est, cap, 0.05 * cap);
-
-    // Switched off after the field use, before any charge: the segment is
-    // saved and evaluated at the next start.
-    field_setup(90);
-    field_idle(cap, 1800, 0);
-    field_use(cap, 7200, 0, 0);
-    field_idle(cap, 1200, 0);
+    // Switched off after 1 h of field use, before any charge: the learning
+    // discharge is saved. Charged elsewhere (the voltage disagrees at the
+    // next start), it is evaluated at its last rest point.
+    b_setup(8.30);
+    b_full(cap);
+    b_idle(cap, 1800, 0);
+    b_use(cap, 3600);
+    b_idle(cap, 1200, 0);
     struct tel_saved sv;
     tel_save(&t, &sv);
-    CHECK(sv.part_active && sv.part_e1 > 0);
+    CHECK(sv.learn_active && sv.learn_rest && sv.learn_rest_e > 0);
     tel_init(&t, &cfg);
-    tel_restore(&t, &sv, 7.4);
-    CHECK(t.part_n == 1 && t.learned_partial);
-    CHECK_NEAR(t.part_est, cap, 0.1 * cap);
-    CHECK(t.part_state == TEL_PART_IDLE);
+    tel_restore(&t, &sv, 8.3);
+    CHECK(t.learned && t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK_NEAR(t.learn_est, cap, 0.07 * cap);
+
+    // Switched on again unchanged: it goes on and ends at the next charge.
+    tel_init(&t, &cfg);
+    CHECK(tel_restore(&t, &sv, in.vbat) == 1);
+    CHECK(t.learn_active && !t.learned);
+    b_idle(cap, 1800, 0);
+    b_charge(cap, 5);
+    CHECK(t.learn_result == TEL_LEARN_USED && t.learn_n == 1);
+    CHECK_NEAR(t.learn_est, cap, 0.07 * cap);
 }
 
 void test_telemetry(void)
 {
     averages();
     counter_and_soc();
+    cycle_curve();
     learning();
     restore();
-    partial_learning();
     vreg_table();
     field_learning();
 }

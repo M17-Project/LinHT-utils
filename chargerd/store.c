@@ -53,29 +53,19 @@ int store_save(const char *dir, const struct tel_saved *s)
 
     fprintf(f, "{\n");
     num(f, "capacity_learned_wh", s->cap_wh, 0);
-    fprintf(f, "  \"learn_n50\": %d,\n  \"learn_n70\": %d,\n", s->n50, s->n70);
+    num(f, "learn_weight", s->learn_w, 0);
+    fprintf(f, "  \"learn_discharges\": %d,\n", s->learn_n);
     num(f, "discharged_total_wh", s->out_total_wh, 0);
     num(f, "energy_since_full_wh", s->e_wh, 0);
     fprintf(f, "  \"anchored\": %d,\n", s->anchored);
     num(f, "soc", s->soc, 0);
     num(f, "time", s->wall, 0);
     fprintf(f, "  \"learn_active\": %d,\n", s->learn_active);
-    num(f, "learn_energy_wh", s->learn_e, 0);
-    num(f, "learn_time_s", s->learn_t, 0);
-    num(f, "learn_soc_voltage", s->learn_socv, 0);
-    num(f, "capacity_partial_wh", s->part_wh, 0);
-    num(f, "partial_weight", s->part_w, 0);
-    fprintf(f, "  \"partial_samples\": %d,\n", s->part_n);
-    fprintf(f, "  \"partial_active\": %d,\n", s->part_active);
-    if (s->part_active)
+    fprintf(f, "  \"learn_rest\": %d,\n", s->learn_rest);
+    if (s->learn_rest)
     {
-        num(f, "partial_soc_voltage_start", s->part_socv0, 0);
-        num(f, "partial_soc_voltage_rest", s->part_socv1, 0);
-        num(f, "partial_load_start_a", s->part_i0, 0);
-        num(f, "partial_load_rest_a", s->part_i1, 0);
-        num(f, "partial_energy_wh", s->part_e1, 0);
-        num(f, "partial_charge_ah", s->part_q1, 0);
-        num(f, "partial_time_s", s->part_t1, 0);
+        num(f, "learn_rest_energy_wh", s->learn_rest_e, 0);
+        num(f, "learn_rest_soc_voltage", s->learn_rest_socv, 0);
     }
     fprintf(f, "  \"clean_stop\": %d\n}\n", s->clean_stop);
     fclose(f);
@@ -116,34 +106,22 @@ int store_load(const char *dir, struct tel_saved *s)
 
     memset(s, 0, sizeof(*s));
     s->cap_wh = get(text, "capacity_learned_wh", 0);
-    s->n50 = (int)get(text, "learn_n50", 0);
-    s->n70 = (int)get(text, "learn_n70", 0);
+    s->learn_w = get(text, "learn_weight", 0);
+    s->learn_n = (int)get(text, "learn_discharges", 0);
+    if (isnan(s->learn_w))
+        s->learn_w = 0;
     s->out_total_wh = get(text, "discharged_total_wh", 0);
     s->e_wh = get(text, "energy_since_full_wh", 0);
     s->anchored = (int)get(text, "anchored", 0);
     s->soc = get(text, "soc", NAN);
     s->wall = get(text, "time", 0);
     s->learn_active = (int)get(text, "learn_active", 0);
-    s->learn_e = get(text, "learn_energy_wh", 0);
-    s->learn_t = get(text, "learn_time_s", 0);
-    s->learn_socv = get(text, "learn_soc_voltage", NAN);
+    s->learn_rest = (int)get(text, "learn_rest", 0);
+    s->learn_rest_e = get(text, "learn_rest_energy_wh", NAN);
+    s->learn_rest_socv = get(text, "learn_rest_soc_voltage", NAN);
+    if (isnan(s->learn_rest_e) || isnan(s->learn_rest_socv))
+        s->learn_rest = 0;
     s->clean_stop = (int)get(text, "clean_stop", 0);
-    s->part_wh = get(text, "capacity_partial_wh", NAN);
-    s->part_w = get(text, "partial_weight", 0);
-    s->part_n = (int)get(text, "partial_samples", 0);
-    if (isnan(s->part_wh) || isnan(s->part_w))
-        s->part_n = 0;
-    s->part_active = (int)get(text, "partial_active", 0);
-    s->part_socv0 = get(text, "partial_soc_voltage_start", NAN);
-    s->part_socv1 = get(text, "partial_soc_voltage_rest", NAN);
-    s->part_i0 = get(text, "partial_load_start_a", NAN);
-    s->part_i1 = get(text, "partial_load_rest_a", NAN);
-    s->part_e1 = get(text, "partial_energy_wh", 0);
-    s->part_q1 = get(text, "partial_charge_ah", 0);
-    s->part_t1 = get(text, "partial_time_s", 0);
-    if (isnan(s->part_socv0) || isnan(s->part_socv1) || isnan(s->part_e1) || isnan(s->part_q1) ||
-        isnan(s->part_t1))
-        s->part_active = 0;
     if (isnan(s->cap_wh) || isnan(s->e_wh) || isnan(s->out_total_wh))
         return -EINVAL;
     return 0;

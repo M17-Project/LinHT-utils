@@ -8,29 +8,28 @@
 
 #define VBAT_TAU_S       30.0   // s, voltage average for the voltage SoC
 #define DT_MAX_S         5.0    // s, longer gaps are not integrated
-#define LEARN_P_MAX      3.0    // W, light load for learning
-#define LEARN_SOCV_MAX   50.0   // %, voltage SoC the discharge must reach
 #define CYCLE_MIN_SOC    10.0   // %, shorter cycles are not logged
 #define CHARGE_IBAT_MIN  0.05   // A, a real charge ends a learning discharge
 
-// Partial cycles, low precision. A segment runs from one rest point to a
-// later one. A rest point is a moment after at least 10 min of discharge
-// without charge current at a light mean load: in quiet (HIZ on USB) or on
-// battery with the radio idle. VBAT is then close to the open circuit
-// voltage and the table gives the SoC. Heavy use in between (TX in the
-// field) does not matter, the energy is counted. The load drop at the two
-// rest points is about the same and mostly cancels. The table is generic.
-#define PART_REST_S      600.0  // s of discharge without charge before a rest point
-#define PART_REST_I      0.3    // A, the 10 min and 1 min mean load of a rest point
-#define PART_DEPTH_MIN   15.0   // %, shallower segments are not used
-#define PART_DEPTH_REF   20.0   // %, depth of weight 1
-#define PART_W_DEPTH_MAX 9.0    // depth weight limit (60 % deep)
-#define PART_I_REF       0.25   // A, rest load that halves the weight
-#define PART_I_MAX       0.6    // A, heavier mean loads of a segment are not used
-#define PART_EST_LO      0.4    // a segment estimate outside 0.4 to 1.6
-#define PART_EST_HI      1.6    //   times rated is dropped as implausible
-#define PART_PRIOR_W     1.0    // weight of the starting value
-#define PART_DECAY       0.9    // older segments lose 10 % per new one
+// Capacity learning. A learning discharge starts at the full anchor (SoC
+// 100 % by definition) and ends at the first charge current. It is
+// evaluated at its last rest point: C_est = E_out / (1 - SoC_v / 100), with
+// E_out the counter since the anchor and SoC_v the voltage SoC at that
+// point. A rest point is a moment after at least 10 min of discharge without
+// charge current at a light mean load (10 min and 1 min), so VBAT is near
+// the open circuit voltage at the load of the radio in RX. Heavy use before
+// it does not matter, the energy is counted. The table error at SoC_v moves
+// C_est by that error over the depth, so deeper discharges weigh more.
+#define LEARN_REST_S     600.0  // s of discharge without charge before a rest point
+#define LEARN_REST_I     0.3    // A, the 10 min and 1 min mean load of a rest point
+#define LEARN_DEPTH_MIN  30.0   // %, shallower discharges are not used
+#define LEARN_DEPTH_REF  40.0   // %, depth of weight 1 (100 -> 60 %)
+#define LEARN_W_MAX      4.0    // weight limit (80 % deep)
+#define LEARN_PRIOR_W    0.5    // weight of the rated value at the start
+#define LEARN_DECAY      0.9    // older discharges lose 10 % per new one
+#define LEARN_W_RELIABLE 2.0    // two of 40 % or one of 50 % deep
+#define LEARN_EST_LO     0.4    // an estimate outside 0.4 to 1.6 times rated
+#define LEARN_EST_HI     1.6    //   is dropped as implausible
 
 // Per cell open circuit points of a generic NMC cell, the table of
 // field-log.py, 100 % at 4.20 V. Under load and while charging it is off by
@@ -46,16 +45,14 @@ void tel_init(struct telemetry *t, const struct chargerd_config *cfg)
     memset(t, 0, sizeof(*t));
     t->cfg = cfg;
     t->cap_wh = cfg->capacity_rated_wh;
+    t->learn_w = LEARN_PRIOR_W;
     t->vbat_avg = NAN;
     t->soc = NAN;
     t->soc_voltage = NAN;
     t->discharge_since = -1;
     t->charge_since = -1;
-    t->learn_socv = NAN;
-    t->part_wh = NAN;
-    t->part_socv0 = t->part_socv = NAN;
-    t->part_i0 = t->part_i1 = NAN;
-    t->part_est = t->part_weight = t->part_depth = NAN;
+    t->learn_rest_e = t->learn_rest_socv = NAN;
+    t->learn_e = t->learn_socv = t->learn_depth = t->learn_est = t->learn_weight = NAN;
 }
 
 #define OCV_N ((int)(sizeof(ocv) / sizeof(ocv[0])))
@@ -165,123 +162,74 @@ static void update_soc(struct telemetry *t)
     }
 }
 
-// End of a learning discharge: C_est = E_out / (1 - SoC_v / 100).
+// End of a learning discharge, evaluated at its last rest point.
 static void learn_finish(struct telemetry *t)
 {
     const struct chargerd_config *cfg = t->cfg;
-    double socv = t->learn_socv;
 
+    if (!t->learn_active)
+        return;
     t->learn_active = 0;
-    if (isnan(socv) || socv > LEARN_SOCV_MAX || t->learn_t <= 0 || t->learn_e <= 0)
-        return;
-    if (t->learn_e / (t->learn_t / 3600.0) >= LEARN_P_MAX)
-        return;
-
-    double depth = 1.0 - socv / 100.0;
-    double est = t->learn_e / depth;
-    t->cap_wh += 0.5 * depth * (est - t->cap_wh);
-    t->cap_wh = clamp(t->cap_wh, 0.5 * cfg->capacity_rated_wh, 1.1 * cfg->capacity_rated_wh);
-    if (depth >= 0.7)
-        t->n70++;
-    if (depth >= 0.5)
-        t->n50++;
     t->learned = 1;
     t->changed = 1;
-}
-
-// End of a partial discharge segment, from the start to the last rest
-// point: C_est = E_out / (SoC_v0 - SoC_v1).
-static void partial_finish(struct telemetry *t)
-{
-    const struct chargerd_config *cfg = t->cfg;
-    int counting = t->part_state == TEL_PART_COUNT;
-
-    t->part_state = TEL_PART_IDLE;
-    if (!counting || t->part_t1 <= 0 || t->part_e1 <= 0)
-        return;
-    double depth = t->part_socv0 - t->part_socv;
-    if (isnan(depth) || depth < PART_DEPTH_MIN)
-        return;
-    double i_mean = t->part_q1 / (t->part_t1 / 3600.0);
-    if (i_mean > PART_I_MAX)
-        return;
-    double est = t->part_e1 / (depth / 100.0);
-    if (est < PART_EST_LO * cfg->capacity_rated_wh || est > PART_EST_HI * cfg->capacity_rated_wh)
-        return;
-
-    // The table error at the two ends is a few % of SoC, so the error of
-    // C_est falls with the depth: weight by depth squared. The load at the
-    // rest points moves VBAT away from the open circuit voltage: less
-    // weight with more load there.
-    double wd = (depth / PART_DEPTH_REF) * (depth / PART_DEPTH_REF);
-    if (wd > PART_W_DEPTH_MAX)
-        wd = PART_W_DEPTH_MAX;
-    double i_rest = 0.5 * (t->part_i0 + t->part_i1);
-    if (isnan(i_rest) || i_rest < 0)
-        i_rest = 0;
-    double w = wd / (1.0 + (i_rest / PART_I_REF) * (i_rest / PART_I_REF));
-
-    if (t->part_n == 0)
+    t->learn_socv = t->learn_depth = t->learn_est = t->learn_weight = NAN;
+    if (!t->learn_rest)
     {
-        t->part_wh = t->cap_wh;
-        t->part_w = PART_PRIOR_W;
+        // The energy since the anchor, so the log can tell a real discharge
+        // without a rest point from a top-off after the anchor.
+        t->learn_e = -t->e_wh;
+        t->learn_result = TEL_LEARN_NO_REST;
+        return;
     }
-    t->part_w = t->part_w * PART_DECAY + w;
-    t->part_wh += w / t->part_w * (est - t->part_wh);
-    t->part_wh = clamp(t->part_wh, 0.5 * cfg->capacity_rated_wh, 1.1 * cfg->capacity_rated_wh);
-    t->part_n++;
-    t->part_est = est;
-    t->part_weight = w;
-    t->part_depth = depth;
-    t->learned_partial = 1;
-    t->changed = 1;
+    t->learn_rest = 0;
+    t->learn_e = t->learn_rest_e;
+    t->learn_socv = t->learn_rest_socv;
+    double depth = 100.0 - t->learn_socv;
+    t->learn_depth = depth;
+    if (depth < LEARN_DEPTH_MIN)
+    {
+        t->learn_result = TEL_LEARN_SHALLOW;
+        return;
+    }
+    double est = t->learn_e / (depth / 100.0);
+    t->learn_est = est;
+    if (est < LEARN_EST_LO * cfg->capacity_rated_wh || est > LEARN_EST_HI * cfg->capacity_rated_wh)
+    {
+        t->learn_result = TEL_LEARN_IMPLAUSIBLE;
+        return;
+    }
+
+    // A table error of a few % of SoC at the rest point moves C_est by that
+    // error over the depth: weight by depth squared.
+    double w = (depth / LEARN_DEPTH_REF) * (depth / LEARN_DEPTH_REF);
+    if (w > LEARN_W_MAX)
+        w = LEARN_W_MAX;
+    t->learn_w = t->learn_w * LEARN_DECAY + w;
+    t->cap_wh += w / t->learn_w * (est - t->cap_wh);
+    t->learn_n++;
+    t->learn_weight = w;
+    t->learn_result = TEL_LEARN_USED;
 }
 
-// Rest points and the energy between them. Called after the ring got the
+// Rest points of a learning discharge. Called after the ring got the
 // sample of this poll.
-static void partial_sample(struct telemetry *t, const struct tel_in *in, double p, double i,
-                           double dt)
+static void rest_sample(struct telemetry *t, const struct tel_in *in, double i, double dt)
 {
     if (in->discharging && i <= CHARGE_IBAT_MIN)
         t->rest_t += dt;
     else
         t->rest_t = 0;
 
-    if (in->discharging)
-    {
-        if (t->part_state == TEL_PART_COUNT)
-        {
-            if (p < 0)
-                t->part_e += -p * dt / 3600.0;
-            if (i < 0)
-                t->part_q += -i * dt / 3600.0;
-            t->part_t += dt;
-        }
-        if (t->rest_t < PART_REST_S || !in->valid || isnan(t->soc_voltage))
-            return;
-        double i10 = -tel_avg_current(t, (unsigned)PART_REST_S);
-        double i1 = -tel_avg_current(t, 60);
-        if (isnan(i10) || isnan(i1) || i10 > PART_REST_I || i1 > PART_REST_I)
-            return;
-        if (t->part_state != TEL_PART_COUNT)
-        {
-            t->part_state = TEL_PART_COUNT;
-            t->part_t = t->part_e = t->part_q = 0;
-            t->part_socv0 = t->soc_voltage;
-            t->part_i0 = i10;
-        }
-        t->part_socv = t->soc_voltage;
-        t->part_i1 = i10;
-        t->part_t1 = t->part_t;
-        t->part_e1 = t->part_e;
-        t->part_q1 = t->part_q;
-    }
-    else if ((in->charging && i > CHARGE_IBAT_MIN) || in->full_event)
-    {
-        partial_finish(t);
-    }
-    // Otherwise (USB without charge, a short gap between leases) the
-    // segment waits. The rest time starts again.
+    if (!t->learn_active || !in->discharging || t->rest_t < LEARN_REST_S || !in->valid ||
+        isnan(t->soc_voltage))
+        return;
+    double i10 = -tel_avg_current(t, (unsigned)LEARN_REST_S);
+    double i1 = -tel_avg_current(t, 60);
+    if (isnan(i10) || isnan(i1) || i10 > LEARN_REST_I || i1 > LEARN_REST_I)
+        return;
+    t->learn_rest = 1;
+    t->learn_rest_e = -t->e_wh;
+    t->learn_rest_socv = t->soc_voltage;
 }
 
 static void seg_finish(struct telemetry *t, const struct tel_in *in)
@@ -367,7 +315,6 @@ void tel_sample(struct telemetry *t, const struct tel_in *in)
 
     t->cycle_ready = 0;
     t->learned = 0;
-    t->learned_partial = 0;
     t->changed = 0;
 
     // A stale measurement: the counter holds the last power.
@@ -397,34 +344,19 @@ void tel_sample(struct telemetry *t, const struct tel_in *in)
 
     if (in->full_event)
     {
-        if (t->learn_active)
-            learn_finish(t);
+        learn_finish(t);
         t->e_wh = 0;
         t->anchored = 1;
         t->learn_active = 1;
-        t->learn_e = 0;
-        t->learn_t = 0;
-        t->learn_socv = NAN;
+        t->learn_rest = 0;
         t->changed = 1;
     }
-    update_soc(t);
-
-    if (t->learn_active)
+    else if (in->charging && i > CHARGE_IBAT_MIN)
     {
-        if (in->discharging)
-        {
-            if (p < 0)
-                t->learn_e += -p * dt / 3600.0;
-            t->learn_t += dt;
-            t->learn_socv = t->soc_voltage;
-        }
-        else if (in->charging && i > CHARGE_IBAT_MIN)
-        {
-            learn_finish(t);
-        }
+        learn_finish(t);
     }
-
-    partial_sample(t, in, p, i, dt);
+    update_soc(t);
+    rest_sample(t, in, i, dt);
 
     // Times since the discharge or charge started. Measured, not estimated.
     if (in->discharging)
@@ -471,21 +403,7 @@ double tel_energy_remaining(const struct telemetry *t)
 
 double tel_capacity_wh(const struct telemetry *t)
 {
-    if (!tel_capacity_reliable(t) && t->part_n > 0)
-        return t->part_wh;
     return t->cap_wh;
-}
-
-const char *tel_capacity_source(const struct telemetry *t)
-{
-    if (tel_capacity_reliable(t))
-        return "full";
-    return t->part_n > 0 ? "partial" : "none";
-}
-
-double tel_capacity_partial_wh(const struct telemetry *t)
-{
-    return t->part_n > 0 ? t->part_wh : NAN;
 }
 
 double tel_soh(const struct telemetry *t)
@@ -500,7 +418,7 @@ double tel_equivalent_cycles(const struct telemetry *t)
 
 int tel_capacity_reliable(const struct telemetry *t)
 {
-    return t->n70 >= 1 || t->n50 >= 2;
+    return t->learn_w >= LEARN_W_RELIABLE;
 }
 
 static double avg_10m_or_1m(const struct telemetry *t)
@@ -537,66 +455,38 @@ void tel_save(const struct telemetry *t, struct tel_saved *s)
 {
     memset(s, 0, sizeof(*s));
     s->cap_wh = t->cap_wh;
-    s->n50 = t->n50;
-    s->n70 = t->n70;
+    s->learn_w = t->learn_w;
+    s->learn_n = t->learn_n;
     s->out_total_wh = t->out_total_wh;
     s->e_wh = t->e_wh;
     s->anchored = t->anchored;
     s->soc = t->soc;
     s->learn_active = t->learn_active;
-    s->learn_e = t->learn_e;
-    s->learn_t = t->learn_t;
-    s->learn_socv = t->learn_socv;
-    s->part_wh = t->part_wh;
-    s->part_w = t->part_w;
-    s->part_n = t->part_n;
-    if (t->part_state == TEL_PART_COUNT && t->part_t1 > 0)
-    {
-        s->part_active = 1;
-        s->part_socv0 = t->part_socv0;
-        s->part_socv1 = t->part_socv;
-        s->part_i0 = t->part_i0;
-        s->part_i1 = t->part_i1;
-        s->part_e1 = t->part_e1;
-        s->part_q1 = t->part_q1;
-        s->part_t1 = t->part_t1;
-    }
+    s->learn_rest = t->learn_active && t->learn_rest;
+    s->learn_rest_e = s->learn_rest ? t->learn_rest_e : NAN;
+    s->learn_rest_socv = s->learn_rest ? t->learn_rest_socv : NAN;
 }
 
 int tel_restore(struct telemetry *t, const struct tel_saved *s, double vbat)
 {
     const struct chargerd_config *cfg = t->cfg;
+    double rated = cfg->capacity_rated_wh;
 
-    if (s->cap_wh > 0)
-        t->cap_wh = clamp(s->cap_wh, 0.5 * cfg->capacity_rated_wh, 1.1 * cfg->capacity_rated_wh);
-    t->n50 = s->n50;
-    t->n70 = s->n70;
+    if (s->cap_wh >= LEARN_EST_LO * rated && s->cap_wh <= LEARN_EST_HI * rated)
+        t->cap_wh = s->cap_wh;
+    if (s->learn_w > 0)
+        t->learn_w = s->learn_w;
+    t->learn_n = s->learn_n;
     t->out_total_wh = s->out_total_wh;
-    t->learn_e = s->learn_e;
-    t->learn_t = s->learn_t;
-    t->learn_socv = s->learn_socv;
     t->learn_active = s->learn_active;
+    t->learn_rest = s->learn_active && s->learn_rest && !isnan(s->learn_rest_e) &&
+                    !isnan(s->learn_rest_socv);
+    if (t->learn_rest)
+    {
+        t->learn_rest_e = s->learn_rest_e;
+        t->learn_rest_socv = s->learn_rest_socv;
+    }
     t->vbat_avg = vbat;
-    if (s->part_n > 0 && s->part_wh > 0 && s->part_w > 0)
-    {
-        t->part_wh = clamp(s->part_wh, 0.5 * cfg->capacity_rated_wh, 1.1 * cfg->capacity_rated_wh);
-        t->part_w = s->part_w;
-        t->part_n = s->part_n;
-    }
-    // A segment of the last run ends here, at its last rest point. The
-    // unit was stopped or switched off, for example after use in the field.
-    if (s->part_active)
-    {
-        t->part_state = TEL_PART_COUNT;
-        t->part_socv0 = s->part_socv0;
-        t->part_socv = s->part_socv1;
-        t->part_i0 = s->part_i0;
-        t->part_i1 = s->part_i1;
-        t->part_e1 = s->part_e1;
-        t->part_q1 = s->part_q1;
-        t->part_t1 = s->part_t1;
-        partial_finish(t);
-    }
 
     int reuse = 0;
     if (s->anchored)
@@ -613,11 +503,10 @@ int tel_restore(struct telemetry *t, const struct tel_saved *s, double vbat)
     else
     {
         // The unit was off for a while (empty or charged elsewhere). A
-        // learning discharge that ended there is evaluated with its last
-        // voltage SoC.
-        if (t->learn_active)
-            learn_finish(t);
+        // learning discharge is evaluated with its last rest point.
+        learn_finish(t);
         t->anchored = 0;
+        t->learn_active = 0;
         t->e_wh = 0;
     }
     update_soc(t);

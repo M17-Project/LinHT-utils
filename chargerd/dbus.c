@@ -21,9 +21,9 @@ struct props
     double vbat, vsys, vbus, ibat, ibus, pbat, pbus, tdie, age, vreg;
     double pavg1, pavg10, pavg60, iavg1, iavg10, iavg60;
     double soc, energy, cap_rated, cap_learned, soh, cycles;
-    const char *soc_source, *soh_source;
-    double cap_partial, cap_partial_w;
-    uint32_t cap_partial_n, recoveries;
+    const char *soc_source;
+    double learn_w;
+    uint32_t learn_n, recoveries;
     int64_t runtime, ttf;
     uint64_t onbat, charging;
 };
@@ -86,10 +86,8 @@ static void refresh(struct props *p)
     p->cap_rated = c->cfg.capacity_rated_wh;
     p->cap_learned = t->cap_wh;
     p->soh = tel_soh(t);
-    p->soh_source = tel_capacity_source(t);
-    p->cap_partial = tel_capacity_partial_wh(t);
-    p->cap_partial_w = t->part_n > 0 ? t->part_w : 0;
-    p->cap_partial_n = (uint32_t)t->part_n;
+    p->learn_n = (uint32_t)t->learn_n;
+    p->learn_w = t->learn_w;
     p->cycles = tel_equivalent_cycles(t);
     p->runtime = tel_runtime_s(t, disch);
     p->ttf = tel_time_to_full_s(t, c->pol.state == ST_CHARGING);
@@ -334,7 +332,6 @@ static const sd_bus_vtable vtable[] = {
     P("Pfm", "b", get_b, pfm, EMITS),
     SD_BUS_PROPERTY("Faults", "as", get_faults, 0, EMITS),
     P("CapacityReliable", "b", get_b, cap_reliable, EMITS),
-    P("StateOfHealthSource", "s", get_s, soh_source, EMITS),
 
     P("BatteryVoltage", "d", get_d, vbat, 0),
     P("SystemVoltage", "d", get_d, vsys, 0),
@@ -362,9 +359,8 @@ static const sd_bus_vtable vtable[] = {
     P("ChargingSec", "t", get_t, charging, 0),
     P("CapacityRatedWh", "d", get_d, cap_rated, 0),
     P("CapacityLearnedWh", "d", get_d, cap_learned, 0),
-    P("CapacityPartialWh", "d", get_d, cap_partial, 0),
-    P("CapacityPartialSamples", "u", get_u, cap_partial_n, 0),
-    P("CapacityPartialWeight", "d", get_d, cap_partial_w, 0),
+    P("CapacityLearnDischarges", "u", get_u, learn_n, 0),
+    P("CapacityLearnWeight", "d", get_d, learn_w, 0),
     P("StateOfHealthPercent", "d", get_d, soh, 0),
     P("EquivalentCycles", "d", get_d, cycles, 0),
     SD_BUS_VTABLE_END,
@@ -394,7 +390,6 @@ void dbus_update(void)
     CH(blocked, "QuietBlockedReason");
     CH(pfm, "Pfm");
     CH(cap_reliable, "CapacityReliable");
-    CH(soh_source, "StateOfHealthSource");
 #undef CH
     if (S.old.nfaults != S.p.nfaults || memcmp(S.old.faults, S.p.faults, sizeof(S.p.faults)))
         changed[n++] = "Faults";

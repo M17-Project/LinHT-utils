@@ -572,33 +572,48 @@ static void charge_voltage(void)
     f.adc_frozen = 0;
 }
 
-// A partial segment in progress survives the state file.
-static void store_partial(void)
+// The learning state and a learning discharge in progress survive the
+// state file. A file of the older daemon (no learn_weight) loads with the
+// weight 0, which tel_restore() takes as the prior.
+static void store_learning(void)
 {
     struct tel_saved a, b;
     memset(&a, 0, sizeof(a));
-    a.cap_wh = 14.8;
-    a.part_active = 1;
-    a.part_socv0 = 88.5;
-    a.part_socv1 = 31.25;
-    a.part_i0 = 0.16;
-    a.part_i1 = 0.17;
-    a.part_e1 = 6.75;
-    a.part_q1 = 0.875;
-    a.part_t1 = 9000;
+    a.cap_wh = 11.25;
+    a.learn_w = 2.75;
+    a.learn_n = 3;
+    a.anchored = 1;
+    a.e_wh = -4.5;
+    a.learn_active = 1;
+    a.learn_rest = 1;
+    a.learn_rest_e = 4.25;
+    a.learn_rest_socv = 58.5;
     CHECK(store_save(dir, &a) == 0);
     CHECK(store_load(dir, &b) == 0);
-    CHECK(b.part_active == 1);
-    CHECK_NEAR(b.part_socv0, 88.5, 1e-6);
-    CHECK_NEAR(b.part_socv1, 31.25, 1e-6);
-    CHECK_NEAR(b.part_i1, 0.17, 1e-6);
-    CHECK_NEAR(b.part_e1, 6.75, 1e-6);
-    CHECK_NEAR(b.part_q1, 0.875, 1e-6);
-    CHECK_NEAR(b.part_t1, 9000, 1e-6);
-    a.part_active = 0;
+    CHECK_NEAR(b.cap_wh, 11.25, 1e-6);
+    CHECK_NEAR(b.learn_w, 2.75, 1e-6);
+    CHECK(b.learn_n == 3 && b.learn_active == 1 && b.learn_rest == 1);
+    CHECK_NEAR(b.learn_rest_e, 4.25, 1e-6);
+    CHECK_NEAR(b.learn_rest_socv, 58.5, 1e-6);
+    a.learn_rest = 0;
     CHECK(store_save(dir, &a) == 0);
     CHECK(store_load(dir, &b) == 0);
-    CHECK(b.part_active == 0);
+    CHECK(b.learn_rest == 0 && b.learn_active == 1);
+
+    char file[300];
+    snprintf(file, sizeof(file), "%s/%s", dir, STORE_STATE);
+    FILE *f = fopen(file, "w");
+    CHECK(f != NULL);
+    if (!f)
+        return;
+    fputs("{\n  \"capacity_learned_wh\": 14.800000,\n  \"learn_n50\": 0,\n"
+          "  \"discharged_total_wh\": 53.687611,\n  \"energy_since_full_wh\": -4.434179,\n"
+          "  \"anchored\": 1,\n  \"learn_active\": 0,\n  \"capacity_partial_wh\": 10.901481,\n"
+          "  \"clean_stop\": 0\n}\n", f);
+    fclose(f);
+    CHECK(store_load(dir, &b) == 0);
+    CHECK_NEAR(b.cap_wh, 14.8, 1e-6);
+    CHECK(b.learn_w == 0 && b.learn_n == 0 && b.learn_rest == 0);
 }
 
 static void cycle_log(void)
@@ -688,7 +703,7 @@ void test_core(void)
     stale_in_quiet();
     ovp_is_fault();
     charge_voltage();
-    store_partial();
+    store_learning();
     cycle_log();
     config_file();
 
