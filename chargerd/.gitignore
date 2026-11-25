@@ -1,3 +1,4 @@
 linht-chargerd
 tests/run-tests
 tests/run-tests-asan
+tests/replay
