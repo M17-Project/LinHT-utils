@@ -12,9 +12,9 @@ What it does:
 - offers the readings, averages and battery estimates on the system D-Bus,
 - gives quiet leases. A lease puts the charger in HIZ, the only state in
   which the charger does not raise the receiver noise floor,
-- learns the battery capacity and the state of health from discharges,
-  from full ones (reliable) and from partial ones (low precision), in
-  quiet on USB and on battery in the field.
+- learns the battery capacity and the state of health from ordinary
+  discharges that start at full, for example 100 to 60 % on battery or in
+  quiet on USB.
 
 It does not handle the i.MX93 SoC ADC (`iio:device0`, its calibration failure
 on Rev C and the volume knob). The battery voltage comes only from the
@@ -116,8 +116,7 @@ All are read only. The ones in the first table send `PropertiesChanged`.
 | `QuietBlockedReason` | s | empty, `low-battery`, `fault`, `chip` |
 | `Pfm` | b | PFM in forward mode enabled |
 | `Faults` | as | fault names from REG20, REG21 and the recent fault flags |
-| `CapacityReliable` | b | one learning discharge of 70 % or two of 50 % |
-| `StateOfHealthSource` | s | capacity behind the SoH and the energy estimates: `full` (reliable, from full anchored discharges), `partial` (no reliable value yet, partial cycle estimate, low precision), `none` (neither, `CapacityLearnedWh` as it is) |
+| `CapacityReliable` | b | learning weight at least 2: two learning discharges of 40 % or one of 50 % |
 
 Measurements, poll them with `GetAll` every 1 to 5 s:
 
@@ -139,11 +138,10 @@ Measurements, poll them with `GetAll` every 1 to 5 s:
 | `RunTimeRemainingSec` | x | down to `critical_soc`, -1 when not on battery |
 | `TimeToFullSec` | x | -1 when not charging, optimistic in CV |
 | `OnBatterySec`, `ChargingSec` | t | since the battery started to supply the unit, or since the charge started |
-| `CapacityRatedWh`, `CapacityLearnedWh` | Wh | from the config, learned from full anchored discharges |
-| `CapacityPartialWh` | Wh | low precision estimate from partial cycles (quiet and on battery), NaN before the first one |
-| `CapacityPartialSamples` | u | partial cycles used |
-| `CapacityPartialWeight` | | sum of their decayed weights, about 1 per 20 % deep cycle at light load. Below 2 the estimate is rough |
-| `StateOfHealthPercent` | % | capacity in use / rated, see `StateOfHealthSource` |
+| `CapacityRatedWh`, `CapacityLearnedWh` | Wh | from the config, and the learned capacity that the SoC counter and the estimates use (the rated one until the first learning discharge) |
+| `CapacityLearnDischarges` | u | learning discharges used |
+| `CapacityLearnWeight` | | sum of their decayed weights with the 0.5 of the rated value, 1 per 100 to 60 % discharge, see `CapacityReliable` |
+| `StateOfHealthPercent` | % | `CapacityLearnedWh` / `CapacityRatedWh` |
 | `EquivalentCycles` | | all discharged energy / rated capacity |
 
 ### Signals
@@ -338,7 +336,7 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
 
 - Energy counter: E += VBAT times IBAT times dt, every second.
 - Full anchor: the `full` rule sets the SoC to 100 % and the counter to 0.
-- SoC = 100 times (1 + E / C), with C the capacity in use (below). Without an
+- SoC = 100 times (1 + E / C), with C the learned capacity (below). Without an
   anchor the SoC comes from a generic 2S NMC voltage table, 10 to 20 % off
   under load. After a restart the saved counter is used again when the
   voltage agrees within 15 %.
@@ -348,69 +346,64 @@ Only VBAT, IBAT and time are measured. The rest is built on them.
   voltage SoC, the counter SoC after a full anchor, the depth of the
   learning discharges and the `auto` quiet voltage limits all refer to the
   energy of a charge to the configured VREG.
-- Learning: a discharge from a full anchor at a mean load below 3 W that
-  ends at a voltage SoC of 50 % or less gives C_est = E_out / (1 - SoC_v / 100).
-  C moves towards C_est with the weight 0.5 times the depth, clamped to 50
-  to 110 % of rated.
-- Partial cycles: the FART auto mode keeps the battery between about 50 and
-  70 % (quiet while the SoC is at least 50 %, charge back to 70 %), and in
-  the field the radio runs on battery and is charged to whatever level the
-  user likes. Neither reaches a full anchor and an empty battery. Both are
-  learned from rest points (see the next point). A segment runs from a
-  rest point to the last rest point before a charge current above 0.05 A
-  (or a full anchor) ends it. The energy (VBAT times IBAT) is counted in
-  between, whatever the load is, so TX in the field is no problem. A short
-  gap without charge current, for example between two leases, does not end
-  the segment. A segment of at least 15 % by the table, with a mean current
-  up to 0.6 A between its two rest points, gives
-  C_est = E_out / (SoC_v start - SoC_v end), dropped outside 40 to 160 %
-  of rated. Its weight is (depth / 20 %) squared, at most 9, divided by
-  1 + (I_rest / 0.25 A) squared, with I_rest the mean load at the two rest
-  points: about 0.6 for a 20 % segment in quiet or idle RX (0.16 A), about
-  6 for a 60 % field day. The estimate starts at `CapacityLearnedWh` with the
-  weight 1, every new segment first multiplies the old weights by 0.9, then
-  the estimate moves towards C_est by its share of the weight. So one
-  shallow segment changes a settled estimate by about a tenth of its error
-  at most, and old segments fade out as the battery ages. Clamped to 50 to
-  110 % of rated.
+- Learning discharge: it starts at the full anchor, where the SoC is 100 %
+  by definition, and ends at the first charge current above 0.05 A (or the
+  next full anchor). A short time on USB without charge current, for
+  example between two quiet leases, does not end it. It is evaluated at its
+  last rest point: C_est = E_out / (1 - SoC_v / 100), with E_out the counter
+  since the anchor and SoC_v the voltage SoC there. So a day of 100 to 60 %
+  on battery, or the first quiet lease of the FART auto mode after a full
+  charge (about 100 to 50 %), is learned when USB comes back.
 - Rest point: a moment after at least 10 min of discharge without charge
   current, with a mean load of at most 0.3 A over those 10 min and over the
-  last minute. VBAT (30 s average) is then close to the open circuit voltage
-  and the table gives the SoC. In quiet on USB the first 10 min after the
-  charge are skipped this way (VBAT relaxes after the charge), after that
-  every second is a rest point. On battery a charge cannot happen, so the
-  rule is the load: idle RX (about 0.16 A) is a rest, TX is not. Use in the
-  field with TX every few minutes has no rest point, the idle time before
-  it (from 10 min after the unplug) and after it (10 min or more) gives the
-  two ends. A USB charge ends the segment, so no segment spans a charge.
-  When the unit is switched off or the daemon stops, the segment so far
-  (start and last rest point) is in `state.json` and is evaluated at the
-  next start. The voltage table itself is not learned, `cycles.jsonl` keeps
-  the discharge curves for a later fit.
-- Accuracy of the partial estimate. The table is generic, a few 10 mV per
-  pack off is 1 to 3 % of SoC at each end. The IR drop at the rest load
-  (0.16 A times about 0.15 ohm, 25 mV) is about the same at both ends, but
-  the table is steeper near full than near 30 %, so it reads the depth a
-  little too large and C_est a few % too low. After heavy TX the cells
-  relax for longer than 10 min, a rest point right after use reads a few
-  10 mV low. The integration of VBAT times IBAT is better than 1 %. In the
-  tests with the synthetic battery (table error up to 10 mV per pack at
-  each end, IR drop, slow polarization) a single 60 % field day comes out
-  about 6 % low (the IR drop effect above), a 20 % quiet cycle within
-  10 %, and several of either settle within 10 % of the true capacity. A steady offset against a full
-  anchored learning means the table does not fit the cells.
-- Capacity in use (`StateOfHealthSource`): the learned one when it is
-  reliable, else the partial estimate when there is one, else the learned
-  one as it is. The SoC counter, `EnergyRemainingWh`, the run times and
-  `StateOfHealthPercent` use it. The partial estimate rests on a generic
-  table, so a table that does not fit the cells shifts it by a few %.
-  Each partial segment is logged as "partial cycle" in the journal.
+  last minute. On battery that is the radio in RX (about 0.16 A), in quiet
+  the same. The energy before it is counted whatever the load was, so TX in
+  the field is no problem, but use that goes on until USB is plugged in
+  leaves the last rest point before the use. When the unit is switched off
+  or the daemon stops, the learning discharge (its last rest point) is in
+  `state.json`. At the next start it goes on when the saved counter is used
+  again, and it is evaluated at once when the counter is dropped (charged
+  elsewhere).
+- Weight and the estimate: a learning discharge of at least 30 % depth
+  (SoC_v at most 70 %) with C_est within 40 to 160 % of rated is used. Its
+  weight is (depth / 40 %) squared, at most 4, so 100 to 60 % has the
+  weight 1. The estimate starts at the rated value with the weight 0.5,
+  every new discharge first multiplies the old weights by 0.9, then the
+  estimate moves towards C_est by its share of the weight. The capacity is
+  reliable at a weight of 2: two discharges of 40 % or one of 50 %. With
+  100 to 60 % cycles the estimate is 70 % of the way from the rated value
+  after the first one and within a few % of the mean of C_est after four.
+  Old discharges fade out as the battery ages. The capacity is used from
+  the first learning discharge on, `CapacityReliable` only says how much
+  evidence it has.
+- What it learns: the energy from full to the point where the voltage table
+  says 0 % at the RX load. A table error of e % of SoC at the rest point
+  moves C_est by e / depth, so 100 to 60 % with a 4 % table error is 10 %
+  off, and deeper discharges count more. The RX load drop (about 0.04 V per
+  pack, IR drop and polarization) is in VBAT at every rest point and in
+  normal use too, so the counter SoC agrees with the voltage SoC at the RX
+  load. Below about 40 % the table is flat (3.3 mV per % and cell between
+  3.70 and 3.75 V), so there the same drop is 5 % of SoC and a deep
+  discharge comes out a few % low. Shallower discharges are not used,
+  because near full the table and the cells differ most: on unit B the
+  battery rested at full reads 94 % (8.28 V), and VBAT 10 min after the
+  unplug reads 88 to 90 % with 2 % of the energy out.
+- Why not between two voltage readings: the daemon learned partial cycles
+  that way from 2026-11-18 (C_est = E / (SoC_v start - SoC_v end)). It
+  needs the slope of the generic table to fit the cells, and on unit B
+  it did not: 12.8 to 14.3 Wh between 90 and 57 %, 7.1 and 9.2 Wh for the
+  two segments that went below 25 %, which had the largest weight, so the
+  estimate settled at 10.9 Wh below every recent C_est. The learning from
+  the full anchor gives 10.2 to 11.4 Wh on the same data.
 - Run time = (SoC - `critical_soc`) times C / the 10 min power average (the
   1 min average until 10 min are filled).
 
-`state.json` holds the learned capacity, the partial estimate with its
-weight and count, the counter, the anchor and a partial segment in
-progress (evaluated at the next start). It is
+`state.json` holds the learned capacity (`capacity_learned_wh`), its weight
+(`learn_weight`) and count (`learn_discharges`), the counter, the anchor and
+a learning discharge in progress (`learn_active`, and at its last rest
+point `learn_rest_energy_wh` and `learn_rest_soc_voltage`). A file of an
+older daemon without `learn_weight` keeps its `capacity_learned_wh` with
+the weight of the prior. It is
 written atomically every 15 min, on a full anchor, at the end of a cycle and
 at a clean stop. `cycles.jsonl` gets one line per discharge or charge of at
 least 10 %: times, VBAT and SoC at start and end, energy, charge, mean power,
@@ -424,23 +417,18 @@ These need hours and are not part of `make test`:
 - Capacity and run time: let the battery reach `full` on USB, then unplug
   USB and let the unit run idle RX until it switches off. The next start
   drops the old counter (the voltage no longer agrees), evaluates the
-  discharge with its last voltage SoC and logs "capacity learned" in
-  `journalctl -u linht-chargerd`. `cycles.jsonl` has the curve, the energy
-  and the run time.
+  discharge at its last rest point and logs "capacity learned (discharge
+  of the last run)" in `journalctl -u linht-chargerd`. `cycles.jsonl` has
+  the curve, the energy and the run time.
 - The same on USB: after `full`, hold `linht-chargerd quiet 0` in a shell.
   The battery drains as on battery until `quiet_end_soc` ends the lease,
   then the charge starts and the discharge (about 80 % deep) is evaluated at
   once.
-- Field use: charge, unplug, leave the unit idle for 20 min, use it on
-  battery for a few hours (60 % or so), leave it idle for 20 min, plug in
-  USB. The charge logs "partial cycle" with the depth, C_est and the
-  weight. Switching the unit off instead of plugging in logs it at the next
-  start as "partial cycle (segment of the last run)".
-- Partial cycles: run the FART auto mode on USB for a day (several 50 to
-  70 % cycles). Every return to charging logs "partial cycle" with the
-  depth, C_est and the weight. Compare `CapacityPartialWh` with a full
-  anchored learning of the same battery. A steady offset means the voltage
-  table does not fit the cells in the 50 to 70 % range.
+- Ordinary use: charge to `full`, unplug, use the unit on battery down to
+  about 60 %, leave it in RX for 10 min, plug in USB. The charge logs
+  "capacity learned" with the energy, the voltage SoC, the depth, C_est,
+  the weight and the new capacity. A discharge that was too shallow or had
+  no rest point logs "capacity not learned" with the reason.
 - Counter accuracy: a lab supply in place of the battery with its own current
   reading, 30 min on battery, compare `EnergyRemainingWh` steps with the
   supply.

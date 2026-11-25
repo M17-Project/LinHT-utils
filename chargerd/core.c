@@ -286,11 +286,38 @@ static void recover_start(struct core *c, double now)
     c->last_kick = now;
 }
 
-static void log_partial(const struct core *c, const char *what)
+#define CORE_LEARN_LOG_WH 0.5     // smaller discharges without a rest point are not logged
+
+static void log_learning(const struct core *c, const char *what)
 {
-    core_log(6, "partial cycle%s: %.1f %% deep, %.2f Wh, weight %.2f, partial capacity %.2f Wh "
-             "from %d cycles (low precision)", what, c->tel.part_depth, c->tel.part_est,
-             c->tel.part_weight, c->tel.part_wh, c->tel.part_n);
+    const struct telemetry *t = &c->tel;
+    const char *rel = tel_capacity_reliable(t) ? "reliable" : "not reliable yet";
+
+    switch (t->learn_result)
+    {
+    case TEL_LEARN_USED:
+        core_log(6, "capacity learned%s: %.2f Wh from full to a voltage SoC of %.1f %% "
+                 "(%.1f %% deep), C_est %.2f Wh, weight %.2f, capacity %.2f Wh "
+                 "(%.0f %% of rated) from %d discharges, %s", what, t->learn_e, t->learn_socv,
+                 t->learn_depth, t->learn_est, t->learn_weight, t->cap_wh, tel_soh(t),
+                 t->learn_n, rel);
+        break;
+    case TEL_LEARN_SHALLOW:
+        core_log(6, "capacity not learned%s: %.2f Wh from full to a voltage SoC of %.1f %%, "
+                 "%.1f %% deep (30 %% needed), capacity stays %.2f Wh", what, t->learn_e,
+                 t->learn_socv, t->learn_depth, t->cap_wh);
+        break;
+    case TEL_LEARN_IMPLAUSIBLE:
+        core_log(5, "capacity not learned%s: %.2f Wh from full to a voltage SoC of %.1f %% "
+                 "gives %.2f Wh, outside 40 to 160 %% of rated", what, t->learn_e, t->learn_socv,
+                 t->learn_est);
+        break;
+    case TEL_LEARN_NO_REST:
+        if (t->learn_e >= CORE_LEARN_LOG_WH)
+            core_log(6, "capacity not learned%s: %.2f Wh from full without a rest point "
+                     "(10 min at a load of 0.3 A or less)", what, t->learn_e);
+        break;
+    }
 }
 
 void core_poll(struct core *c, double now, double wall)
@@ -364,12 +391,11 @@ void core_poll(struct core *c, double now, double wall)
     {
         c->restore_pending = 0;
         int reused = tel_restore(&c->tel, &c->saved, c->m.vbat);
-        core_log(6, "state file: learned %.2f Wh, counter %s", c->tel.cap_wh,
+        core_log(6, "state file: learned %.2f Wh from %d discharges (weight %.2f), counter %s",
+                 c->tel.cap_wh, c->tel.learn_n, c->tel.learn_w,
                  reused ? "reused" : "dropped (voltage disagrees or no anchor)");
         if (c->tel.learned)
-            core_log(6, "capacity learned: %.2f Wh (%.0f %% of rated)", c->tel.cap_wh, tel_soh(&c->tel));
-        if (c->tel.learned_partial)
-            log_partial(c, " (segment of the last run)");
+            log_learning(c, " (discharge of the last run)");
         save_state(c, now, wall, 0);
     }
 
@@ -408,9 +434,7 @@ void core_poll(struct core *c, double now, double wall)
         if (t.full_event)
             core_log(6, "battery full, SoC anchor at 100 %%");
         if (c->tel.learned)
-            core_log(6, "capacity learned: %.2f Wh (%.0f %% of rated)", c->tel.cap_wh, tel_soh(&c->tel));
-        if (c->tel.learned_partial)
-            log_partial(c, "");
+            log_learning(c, "");
         if (c->tel.cycle_ready)
         {
             rc = store_append_cycle(c->cfg.state_dir, &c->tel.cycle);
