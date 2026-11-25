@@ -3,6 +3,7 @@
 #   make            the daemon (needs libsystemd)
 #   make test       unit tests on the host with a fake chip (no libsystemd)
 #   make asan       the same tests with AddressSanitizer and UBSan
+#   make replay     tests/replay, logged battery data through the telemetry
 #   make install    DESTDIR and PREFIX as usual
 
 CC ?= gcc
@@ -31,6 +32,11 @@ tests/run-tests-asan: $(TESTS) $(TEST_HDR) $(LIB) $(HDR)
 	$(CC) $(WARN) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -I. \
 		$(TESTS) $(LIB) -o $@ -lm
 
+tests/replay: tests/replay.c telemetry.c config.c $(HDR)
+	$(CC) $(WARN) $(CFLAGS) -I. tests/replay.c telemetry.c config.c -o $@ -lm
+
+replay: tests/replay
+
 test: tests/run-tests
 	./tests/run-tests
 
@@ -45,6 +51,6 @@ install: linht-chargerd
 	install -D -m 0644 chargerd.conf $(DESTDIR)$(SYSCONFDIR)/linht/chargerd.conf
 
 clean:
-	rm -f linht-chargerd tests/run-tests tests/run-tests-asan
+	rm -f linht-chargerd tests/run-tests tests/run-tests-asan tests/replay
 
-.PHONY: all test asan install clean
+.PHONY: all test asan replay install clean

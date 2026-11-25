@@ -27,7 +27,23 @@ make            # the daemon, needs libsystemd (sd-bus)
 make test       # unit tests on any Linux host with a fake chip
 make asan       # the same tests with AddressSanitizer and UBSan
 make install DESTDIR=... PREFIX=/usr
+make replay     # tests/replay, logged battery data through the telemetry
 ```
+
+`tests/replay` feeds logged data through the estimates of the daemon and
+prints every learning discharge, so a change of the learning can be checked
+against a real unit. `tests/replay-stream.py` makes its input from the
+cycle log of the daemon (`cycles.jsonl`, each cycle at its mean power with
+the logged VBAT curve) or from the samples of the FART field logger (the
+`battery` part, every 5 s):
+
+```sh
+tests/replay-stream.py cycles cycles.jsonl | tests/replay 8.40
+zstd -dc --long=31 samples.jsonl.zst > samples.jsonl
+tests/replay-stream.py combined cycles.jsonl samples.jsonl | tests/replay 8.40
+```
+
+The argument is the charge voltage the data was taken with (VREG).
 
 The LinHT image has GCC and the libsystemd headers, so `make` and
 `make test` also run on the unit itself. No other library is needed.
