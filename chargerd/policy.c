@@ -13,6 +13,14 @@
 #define UNFULL_VREG      0.15   // V below VREG
 #define UNFULL_HOLD_S    10.0   // s
 #define QUIET_VBAT_HYST  0.10   // V, auto start limit above the end limit
+// Absolute floor of a quiet lease on USB, per cell. It applies whatever the
+// SoC says, also when the counter is trusted: a counter anchored at full
+// with a capacity that is too large (the rated one before any learning)
+// still shows 12 % when the battery is empty, which is how unit B was
+// discharged to 2.82 V per cell under two quiet leases on 2026-11-26.
+#define QUIET_FLOOR_VCELL 3.40  // V per cell (6.80 V for 2S), all leases end
+#define QUIET_FLOOR_HYST  0.10  // V per cell above the floor for a new lease
+#define QUIET_FLOOR_S     10.0  // s below the floor before the leases end
 
 void policy_init(struct policy *p, const struct chargerd_config *cfg)
 {
@@ -21,6 +29,7 @@ void policy_init(struct policy *p, const struct chargerd_config *cfg)
     p->charging_enabled = 1;
     p->full_cond_since = -1;
     p->unfull_since = -1;
+    p->floor_since = -1;
     p->state = ST_CHARGING;
     p->want_chg = 1;
     p->last.soc = NAN;
@@ -65,15 +74,34 @@ int policy_release(struct policy *p, const char *owner)
     return 1;
 }
 
+static double floor_v(const struct policy *p)
+{
+    return (p->cfg->cells > 0 ? p->cfg->cells : 2) * QUIET_FLOOR_VCELL;
+}
+
 static int below_min(const struct policy *p, const struct policy_in *in)
 {
+    double hyst = (p->cfg->cells > 0 ? p->cfg->cells : 2) * QUIET_FLOOR_HYST;
+    if (!isnan(in->vbat) && in->vbat < floor_v(p) + hyst)
+        return 1;
     if (in->soc_trusted && !isnan(in->soc))
         return in->soc < p->cfg->quiet_min_soc;
     return in->vbat < p->min_vbat;
 }
 
-static int below_end(const struct policy *p, const struct policy_in *in)
+static int below_end(struct policy *p, const struct policy_in *in)
 {
+    if (!isnan(in->vbat) && in->vbat < floor_v(p))
+    {
+        if (p->floor_since < 0)
+            p->floor_since = in->now;
+        if (in->now - p->floor_since >= QUIET_FLOOR_S)
+            return 1;
+    }
+    else
+    {
+        p->floor_since = -1;
+    }
     if (in->soc_trusted && !isnan(in->soc))
         return in->soc < p->cfg->quiet_end_soc;
     return in->vbat < p->end_vbat;

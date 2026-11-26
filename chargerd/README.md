@@ -111,6 +111,11 @@ Lease rules:
 - On battery a lease is granted and costs nothing.
 - On USB a lease is refused below `quiet_min_soc`. All leases end below
   `quiet_end_soc`, and new ones are refused until `quiet_resume_soc`.
+- On USB all leases also end when VBAT stays below 3.40 V per cell (6.80 V
+  for 2S) for 10 s, whatever the SoC and its source, and new ones need
+  3.50 V per cell. This floor is not configurable. A counter anchored at
+  full with a too large capacity can still show 12 % when the battery is
+  empty, which is how unit B went down to 2.82 V per cell on 2026-11-26.
 - A charger fault ends all leases and refuses new ones. The one exception
   is VBAT_OVP at the end of charge (see below): leases are kept and granted,
   because HIZ stops the charging, the safest thing during that OVP. The
