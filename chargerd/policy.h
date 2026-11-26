@@ -68,6 +68,7 @@ struct policy
     int full;               // latched "battery full"
     double full_cond_since; // start of the second full rule, or -1
     double unfull_since;    // start of the leave-full condition, or -1
+    double floor_since;     // start of VBAT below the quiet floor, or -1
     int holding;            // full-hold active
     int full_event;         // set by policy_step when full was entered
     int leases_ended;       // set by policy_step when leases were ended

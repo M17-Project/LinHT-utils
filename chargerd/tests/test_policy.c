@@ -118,6 +118,29 @@ static void low_battery(void)
     step(3);
     CHECK(p.nlease == 0 && p.low_block);
 
+    // The absolute floor of 3.40 V per cell ends the leases also with a
+    // trusted counter that is far too high (unit B showed 12 % when it was
+    // empty on 2026-11-26), after 10 s, and new leases need 3.50 V per cell.
+    setup();
+    in.soc = 30;
+    in.vbat = 7.20;
+    step(1);
+    CHECK(policy_quiet(&p, ":1.33", 300, 1, &g) == PERR_OK);
+    in.vbat = 6.75;
+    step(2);
+    CHECK(p.nlease == 1);
+    step(11);
+    CHECK(p.nlease == 1);
+    step(12);
+    CHECK(p.nlease == 0 && p.low_block && p.state == ST_CHARGING);
+    in.vbat = 6.95;
+    in.soc = 50;
+    step(13);
+    CHECK(policy_quiet(&p, ":1.33", 60, 13, &g) == PERR_LOW_BATTERY);
+    in.vbat = 7.05;
+    step(14);
+    CHECK(policy_quiet(&p, ":1.33", 60, 14, &g) == PERR_OK);
+
     // On battery quiet is free: no limits.
     setup();
     in.usb = 0;
